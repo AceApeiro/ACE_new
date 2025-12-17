@@ -3,155 +3,443 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ACE – arXiv ZIP Extractor</title>
+  <title>ACE – Zip Extractor (arXiv)</title>
 
-  <!-- Local libraries (NO CDN) -->
+  <!-- Load libs locally from /assets (relative paths so GitHub Pages subpath works) -->
   <script src="./assets/jszip.min.js"></script>
   <script src="./assets/pdf.min.js"></script>
 
   <style>
-    body {
-      margin: 0;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
-      background: #0b0f14;
-      color: #e5e7eb;
+    :root{
+      --bg:#0b0f14; --panel:#111827; --panel2:#0f172a; --muted:#94a3b8;
+      --text:#e5e7eb; --good:#22c55e; --bad:#ef4444; --warn:#f59e0b; --line:#1f2937;
+      --btn:#2563eb; --btn2:#334155;
     }
-    .wrap {
-      max-width: 1100px;
-      margin: auto;
-      padding: 16px;
-    }
-    .card {
-      background: #111827;
-      border: 1px solid #1f2937;
-      border-radius: 12px;
-      padding: 14px;
-      margin-bottom: 12px;
-    }
-    .btn {
-      background: #2563eb;
-      border: none;
-      color: white;
-      padding: 10px 14px;
-      border-radius: 10px;
-      cursor: pointer;
-      font-weight: 700;
-    }
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    .badge {
-      display: inline-block;
-      padding: 4px 10px;
-      border-radius: 999px;
-      background: #0b1220;
-      border: 1px solid #334155;
-      font-size: 12px;
-    }
-    .fileLabel {
-      border: 1px dashed #334155;
-      padding: 10px 12px;
-      border-radius: 12px;
-      cursor: pointer;
-      display: inline-block;
-    }
-    input[type=file] {
-      display: none;
-    }
-    canvas {
-      width: 100%;
-      background: #050a12;
-      border-radius: 10px;
-    }
+    *{box-sizing:border-box}
+    body{margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:var(--bg); color:var(--text)}
+    .wrap{max-width:1400px; margin:0 auto; padding:14px}
+    .top{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+    .card{background:linear-gradient(180deg,var(--panel),var(--panel2)); border:1px solid var(--line); border-radius:14px; padding:12px}
+    .grow{flex:1}
+    .row{display:flex; gap:12px; margin-top:12px}
+    .colL{width:320px; min-width:280px}
+    .colR{flex:1; min-width:320px}
+    .h{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px}
+    .title{font-size:14px; font-weight:700}
+    .muted{color:var(--muted); font-size:12px}
+    .btn{border:0; background:var(--btn); color:white; padding:10px 12px; border-radius:10px; cursor:pointer; font-weight:700}
+    .btn.secondary{background:var(--btn2)}
+    .btn:disabled{opacity:.5; cursor:not-allowed}
+    input[type="file"]{display:none}
+    .fileLabel{display:inline-flex; gap:10px; align-items:center; border:1px dashed #334155; padding:10px 12px; border-radius:12px; cursor:pointer}
+    .list{max-height:420px; overflow:auto; border-top:1px solid var(--line); margin-top:10px; padding-top:10px}
+    .item{padding:10px; border:1px solid var(--line); border-radius:12px; margin-bottom:8px; cursor:pointer; background:#0b1220}
+    .item.active{outline:2px solid #2563eb}
+    .badge{font-size:11px; padding:3px 8px; border-radius:999px; border:1px solid var(--line); background:#0b1220}
+    .badge.good{border-color:rgba(34,197,94,.6); color:var(--good)}
+    .badge.bad{border-color:rgba(239,68,68,.6); color:var(--bad)}
+    .badge.warn{border-color:rgba(245,158,11,.6); color:var(--warn)}
+    .grid{display:grid; grid-template-columns: 1.35fr .65fr; gap:12px}
+    .tabs{display:flex; gap:8px; flex-wrap:wrap}
+    .tab{padding:8px 10px; border-radius:10px; border:1px solid var(--line); background:#0b1220; cursor:pointer; font-weight:700; font-size:12px}
+    .tab.active{border-color:#2563eb}
+    .pane{display:none}
+    .pane.active{display:block}
+    .box{border:1px solid var(--line); border-radius:12px; overflow:hidden; background:#050a12}
+    .boxHead{padding:8px 10px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between}
+    .boxBody{padding:10px}
+    textarea{width:100%; min-height:220px; background:#050a12; color:var(--text); border:1px solid var(--line); border-radius:12px; padding:10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px}
+    .kv{display:grid; grid-template-columns: 160px 1fr; gap:8px; font-size:13px}
+    .k{color:var(--muted)}
+    .statusLine{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+    canvas{width:100%; height:auto; background:#0b1220; border-radius:10px}
+    .htmlPreview{max-height:520px; overflow:auto; background:white; color:black; border-radius:10px; padding:10px}
+    .small{font-size:12px}
+    .hr{height:1px; background:var(--line); margin:10px 0}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace}
   </style>
 </head>
 
 <body>
 <div class="wrap">
 
-  <div class="card">
-    <h2>ACE – Apeiro Citation Extractor</h2>
-    <p>Upload a ZIP containing arXiv PDF + XML + HTML summary.</p>
+  <div class="top card">
+    <div class="grow">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:16px;font-weight:900;letter-spacing:.2px">ACE – Apeiro Citation Extractor (arXiv ZIP)</div>
+          <div class="muted">Upload a ZIP containing PDF + API XML + Scraping XML + HTML summary. Validate arXiv ID/version, pick title, generate XML.</div>
+        </div>
 
-    <label class="fileLabel">
-      Choose ZIP
-      <input id="zipInput" type="file" accept=".zip" />
-    </label>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label class="fileLabel">
+            <span class="badge">ZIP</span>
+            <span class="small">Choose ZIP</span>
+            <input id="zipInput" type="file" accept=".zip" />
+          </label>
 
-    <span class="badge" id="zipStatus">No ZIP loaded</span>
+          <button id="runBtn" class="btn" disabled>Run Extraction</button>
+          <button id="downloadBtn" class="btn secondary" disabled>Download XML</button>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="statusLine">
+        <span class="badge" id="zipBadge">No ZIP loaded</span>
+        <span class="muted" id="hint">If ZIP won’t load, open DevTools → Console and screenshot errors.</span>
+      </div>
+    </div>
   </div>
 
-  <div class="card">
-    <h3>PDF Preview</h3>
-    <canvas id="pdfCanvas"></canvas>
-  </div>
+  <div class="row">
+    <div class="colL card">
+      <div class="h">
+        <div class="title">Files in ZIP</div>
+        <div class="muted" id="fileCount">0</div>
+      </div>
+      <div class="muted">Select a file set (PDF). ACE tries to auto-pair support docs.</div>
+      <div class="list" id="fileList"></div>
+    </div>
 
+    <div class="colR">
+      <div class="grid">
+
+        <div class="card">
+          <div class="h">
+            <div class="title">Preview</div>
+            <div class="tabs">
+              <div class="tab active" data-tab="pdfPane">PDF</div>
+              <div class="tab" data-tab="htmlPane">HTML Summary</div>
+              <div class="tab" data-tab="apiPane">API XML</div>
+              <div class="tab" data-tab="scrapePane">Scrape XML</div>
+            </div>
+          </div>
+
+          <div id="pdfPane" class="pane active">
+            <div class="box">
+              <div class="boxHead">
+                <div class="small muted">PDF rendered via PDF.js</div>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <button class="btn secondary" id="prevPageBtn" disabled>Prev</button>
+                  <span class="badge mono" id="pageInfo">- / -</span>
+                  <button class="btn secondary" id="nextPageBtn" disabled>Next</button>
+                </div>
+              </div>
+              <div class="boxBody">
+                <canvas id="pdfCanvas"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div id="htmlPane" class="pane">
+            <div class="box">
+              <div class="boxHead"><div class="small muted">HTML sanitized (scripts removed).</div></div>
+              <div class="boxBody"><div id="htmlPreview" class="htmlPreview">No HTML loaded.</div></div>
+            </div>
+          </div>
+
+          <div id="apiPane" class="pane">
+            <textarea id="apiText" readonly placeholder="API XML preview..."></textarea>
+          </div>
+
+          <div id="scrapePane" class="pane">
+            <textarea id="scrapeText" readonly placeholder="Scrape XML preview..."></textarea>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="h">
+            <div class="title">Extraction</div>
+            <span class="badge" id="selectedSet">No set selected</span>
+          </div>
+
+          <div class="box">
+            <div class="boxHead"><div class="small muted">Validation checks</div></div>
+            <div class="boxBody">
+              <div class="kv">
+                <div class="k">Detected arXiv ID</div><div class="mono" id="arxivIdVal">—</div>
+                <div class="k">Detected version</div><div class="mono" id="versionVal">—</div>
+                <div class="k">ID/Version match</div><div id="matchVal">—</div>
+                <div class="k">Chosen title</div><div id="titleVal">—</div>
+                <div class="k">Abstract found?</div><div id="absVal">—</div>
+                <div class="k">Keywords found?</div><div id="kwVal">—</div>
+                <div class="k">Authors check</div><div id="authVal">—</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="hr"></div>
+
+          <div class="title" style="margin-bottom:8px">Generated XML</div>
+          <textarea id="outXml" placeholder="Run Extraction to generate XML..." spellcheck="false"></textarea>
+        </div>
+
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
-  /* ---------------- PDF.js setup ---------------- */
+  // Tabs
+  document.querySelectorAll(".tab").forEach(t => {
+    t.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".pane").forEach(p => p.classList.remove("active"));
+      t.classList.add("active");
+      document.getElementById(t.dataset.tab).classList.add("active");
+    });
+  });
+
+  // ---- HARD CHECK: libs loaded ----
+  const zipBadge = document.getElementById("zipBadge");
+  if (!window.JSZip) {
+    zipBadge.className = "badge bad";
+    zipBadge.textContent = "JSZip failed to load (check ./assets/jszip.min.js)";
+    throw new Error("JSZip not loaded");
+  }
   if (!window.pdfjsLib) {
-    alert("PDF.js failed to load");
+    zipBadge.className = "badge bad";
+    zipBadge.textContent = "PDF.js failed to load (check ./assets/pdf.min.js)";
+    throw new Error("pdfjsLib not loaded");
   }
 
+  // Worker path (local)
   pdfjsLib.GlobalWorkerOptions.workerSrc = "./assets/pdf.worker.min.js";
 
-  /* ---------------- State ---------------- */
+  // ---- State ----
+  const state = {
+    zip: null,
+    sets: [],
+    selectedSetIndex: -1,
+    selected: null,
+    pdfDoc: null,
+    pdfPageNum: 1,
+    pdfPageCount: 0,
+  };
+
+  // ---- UI refs ----
   const zipInput = document.getElementById("zipInput");
-  const zipStatus = document.getElementById("zipStatus");
+  const runBtn = document.getElementById("runBtn");
+  const downloadBtn = document.getElementById("downloadBtn");
+  const fileCount = document.getElementById("fileCount");
+  const fileList = document.getElementById("fileList");
+  const selectedSet = document.getElementById("selectedSet");
+
+  const apiText = document.getElementById("apiText");
+  const scrapeText = document.getElementById("scrapeText");
+  const htmlPreview = document.getElementById("htmlPreview");
+
+  const arxivIdVal = document.getElementById("arxivIdVal");
+  const versionVal = document.getElementById("versionVal");
+  const matchVal = document.getElementById("matchVal");
+  const titleVal = document.getElementById("titleVal");
+  const absVal = document.getElementById("absVal");
+  const kwVal = document.getElementById("kwVal");
+  const authVal = document.getElementById("authVal");
+  const outXml = document.getElementById("outXml");
+
   const pdfCanvas = document.getElementById("pdfCanvas");
+  const prevPageBtn = document.getElementById("prevPageBtn");
+  const nextPageBtn = document.getElementById("nextPageBtn");
+  const pageInfo = document.getElementById("pageInfo");
 
-  let pdfDoc = null;
+  const lower = s => (s || "").toLowerCase();
+  const ARXIV_ID_RE = /(\d{4}\.\d{4,5})(v\d+)?/i;
 
-  /* ---------------- ZIP load ---------------- */
+  function extractArxivFromText(text) {
+    if (!text) return { id:null, version:null };
+    const m1 = /arxiv:\s*(\d{4}\.\d{4,5})(v\d+)?/i.exec(text);
+    if (m1) return { id: m1[1], version: (m1[2]||null) };
+    const m2 = /oai:arxiv\.org:(\d{4}\.\d{4,5})/i.exec(text);
+    if (m2) return { id: m2[1], version: null };
+    const m3 = ARXIV_ID_RE.exec(text);
+    if (m3) return { id: m3[1], version: (m3[2]||null) };
+    return { id:null, version:null };
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? "").replace(/[&<>"']/g, c => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[c]));
+  }
+
+  function stripScripts(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    doc.querySelectorAll("script, iframe, object, embed").forEach(n => n.remove());
+    doc.querySelectorAll("*").forEach(el => {
+      [...el.attributes].forEach(a => { if (a.name.startsWith("on")) el.removeAttribute(a.name); });
+    });
+    return doc.body.innerHTML || "";
+  }
+
+  function clearPdf(){
+    state.pdfDoc = null;
+    state.pdfPageNum = 1;
+    state.pdfPageCount = 0;
+    pageInfo.textContent = "- / -";
+    prevPageBtn.disabled = true;
+    nextPageBtn.disabled = true;
+    const ctx = pdfCanvas.getContext("2d");
+    ctx.clearRect(0,0,pdfCanvas.width,pdfCanvas.height);
+  }
+
+  async function renderPdfPage(num){
+    if (!state.pdfDoc) return;
+    const page = await state.pdfDoc.getPage(num);
+    const viewport = page.getViewport({ scale: 1.3 });
+    const ctx = pdfCanvas.getContext("2d");
+    pdfCanvas.width = viewport.width;
+    pdfCanvas.height = viewport.height;
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    pageInfo.textContent = `${num} / ${state.pdfPageCount}`;
+    prevPageBtn.disabled = (num <= 1);
+    nextPageBtn.disabled = (num >= state.pdfPageCount);
+  }
+
+  async function loadPdfFromZip(zip, name){
+    clearPdf();
+    const file = zip.file(name);
+    if (!file) return;
+    const u8 = await file.async("uint8array");
+    const pdf = await pdfjsLib.getDocument({ data: u8 }).promise;
+    state.pdfDoc = pdf;
+    state.pdfPageCount = pdf.numPages;
+    state.pdfPageNum = 1;
+    await renderPdfPage(1);
+  }
+
+  prevPageBtn.addEventListener("click", async () => {
+    if (!state.pdfDoc || state.pdfPageNum <= 1) return;
+    state.pdfPageNum -= 1;
+    await renderPdfPage(state.pdfPageNum);
+  });
+  nextPageBtn.addEventListener("click", async () => {
+    if (!state.pdfDoc || state.pdfPageNum >= state.pdfPageCount) return;
+    state.pdfPageNum += 1;
+    await renderPdfPage(state.pdfPageNum);
+  });
+
+  function renderSetList(){
+    fileList.innerHTML = "";
+    state.sets.forEach((s, idx) => {
+      const div = document.createElement("div");
+      div.className = "item" + (idx === state.selectedSetIndex ? " active" : "");
+      div.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div style="font-weight:900;font-size:13px">${escapeHtml(s.pdfName.split("/").pop())}</div>
+          <span class="badge">${escapeHtml(extractArxivFromText(s.pdfName).id || "PDF")}</span>
+        </div>`;
+      div.addEventListener("click", () => selectSet(idx));
+      fileList.appendChild(div);
+    });
+  }
+
+  async function loadTextPreview(name, targetTextarea){
+    if (!name) { targetTextarea.value = ""; return; }
+    const file = state.zip.file(name);
+    if (!file) { targetTextarea.value = ""; return; }
+    targetTextarea.value = await file.async("string");
+  }
+
+  async function loadHtmlPreview(name){
+    if (!name) { htmlPreview.innerHTML = "No HTML loaded."; return; }
+    const file = state.zip.file(name);
+    if (!file) { htmlPreview.innerHTML = "No HTML loaded."; return; }
+    const txt = await file.async("string");
+    htmlPreview.innerHTML = stripScripts(txt) || "No HTML content.";
+  }
+
+  async function selectSet(idx){
+    state.selectedSetIndex = idx;
+    renderSetList();
+
+    const set = state.sets[idx];
+    selectedSet.textContent = `Selected: ${set.pdfName.split("/").pop()}`;
+
+    const names = Object.keys(state.zip.files).filter(n => !state.zip.files[n].dir);
+    let { id: guessedId } = extractArxivFromText(set.pdfName);
+
+    const pdfName = set.pdfName;
+    const pdfBase = pdfName.split("/").pop().replace(/\.pdf$/i,"");
+
+    const apiCandidates = names.filter(n => lower(n).endsWith(".xml") && /oai|record|arxiv|oaipmh/i.test(n));
+    const scrapeCandidates = names.filter(n => lower(n).endsWith(".xml") && /scrap|scrape|arxiv/i.test(n) && !/oai|record|oaipmh/i.test(n));
+    const htmlCandidates = names.filter(n => lower(n).endsWith(".html") || lower(n).endsWith(".htm"));
+
+    const pickBest = (cands) => {
+      if (!cands.length) return null;
+      if (guessedId) {
+        const m = cands.find(n => n.includes(guessedId));
+        if (m) return m;
+      }
+      const m2 = cands.find(n => lower(n).includes(lower(pdfBase)));
+      if (m2) return m2;
+      return cands[0];
+    };
+
+    const apiName = pickBest(apiCandidates);
+    const scrapeName = pickBest(scrapeCandidates);
+    const htmlName = pickBest(htmlCandidates);
+
+    state.selected = { pdfName, apiName, scrapeName, htmlName };
+    runBtn.disabled = false;
+
+    await loadPdfFromZip(state.zip, pdfName);
+    await loadTextPreview(apiName, apiText);
+    await loadTextPreview(scrapeName, scrapeText);
+    await loadHtmlPreview(htmlName);
+  }
+
   zipInput.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
+    if (!file) return;
 
-    if (!file) {
-      zipStatus.textContent = "No file selected";
-      return;
-    }
-
-    zipStatus.textContent = `Loading ${file.name}...`;
+    clearPdf();
+    zipBadge.className = "badge warn";
+    zipBadge.textContent = "Loading ZIP…";
 
     try {
       const buf = await file.arrayBuffer();
-      const zip = await JSZip.loadAsync(buf);
+      state.zip = await JSZip.loadAsync(buf);
 
-      const pdfName = Object.keys(zip.files).find(n => n.toLowerCase().endsWith(".pdf"));
+      const names = [];
+      state.zip.forEach((path, entry) => { if (!entry.dir) names.push(path); });
+      fileCount.textContent = String(names.length);
 
-      if (!pdfName) {
-        zipStatus.textContent = "ZIP loaded, but no PDF found";
-        return;
-      }
+      const pdfs = names.filter(n => lower(n).endsWith(".pdf"));
+      state.sets = pdfs.map(pdfName => ({ pdfName }));
 
-      zipStatus.textContent = `ZIP loaded: ${file.name}`;
-      loadPdf(zip, pdfName);
+      zipBadge.className = "badge good";
+      zipBadge.textContent = `ZIP loaded: ${file.name}`;
+
+      renderSetList();
+      if (state.sets.length) await selectSet(0);
+      else zipBadge.textContent = "ZIP loaded but no PDF found";
 
     } catch (err) {
       console.error(err);
-      zipStatus.textContent = "Failed to read ZIP";
+      zipBadge.className = "badge bad";
+      zipBadge.textContent = "Failed to read ZIP (see Console)";
     }
   });
 
-  /* ---------------- PDF render ---------------- */
-  async function loadPdf(zip, name) {
-    const file = zip.file(name);
-    const data = await file.async("uint8array");
+  // Your extraction button can stay as-is later
+  runBtn.addEventListener("click", () => {
+    outXml.value = "Extraction pipeline next step (ZIP + preview should work now).";
+    downloadBtn.disabled = false;
+  });
 
-    pdfDoc = await pdfjsLib.getDocument({ data }).promise;
-    const page = await pdfDoc.getPage(1);
-
-    const viewport = page.getViewport({ scale: 1.4 });
-    const ctx = pdfCanvas.getContext("2d");
-
-    pdfCanvas.width = viewport.width;
-    pdfCanvas.height = viewport.height;
-
-    await page.render({ canvasContext: ctx, viewport }).promise;
-  }
+  downloadBtn.addEventListener("click", () => {
+    const xml = outXml.value || "";
+    const blob = new Blob([xml], { type: "application/xml;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `ACE_${Date.now()}_arxiv.xml`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
 </script>
-
 </body>
 </html>
