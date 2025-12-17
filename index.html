@@ -5,9 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>ACE – Zip Extractor (arXiv)</title>
 
-  <!-- Load libs locally from /assets (relative paths so GitHub Pages subpath works) -->
-  <script src="./assets/jszip.min.js"></script>
-  <script src="./assets/pdf.min.js"></script>
+  <!-- JSZip (UMD global: window.JSZip) -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 
   <style>
     :root{
@@ -87,7 +86,7 @@
 
       <div class="statusLine">
         <span class="badge" id="zipBadge">No ZIP loaded</span>
-        <span class="muted" id="hint">If ZIP won’t load, open DevTools → Console and screenshot errors.</span>
+        <span class="muted" id="hint">Tip: if nothing happens, open DevTools Console and tell me the first red error.</span>
       </div>
     </div>
   </div>
@@ -98,7 +97,7 @@
         <div class="title">Files in ZIP</div>
         <div class="muted" id="fileCount">0</div>
       </div>
-      <div class="muted">Select a file set (PDF). ACE tries to auto-pair support docs.</div>
+      <div class="muted">Select a PDF. ACE tries to auto-pair support docs.</div>
       <div class="list" id="fileList"></div>
     </div>
 
@@ -134,8 +133,12 @@
 
           <div id="htmlPane" class="pane">
             <div class="box">
-              <div class="boxHead"><div class="small muted">HTML sanitized (scripts removed).</div></div>
-              <div class="boxBody"><div id="htmlPreview" class="htmlPreview">No HTML loaded.</div></div>
+              <div class="boxHead">
+                <div class="small muted">HTML sanitized before display.</div>
+              </div>
+              <div class="boxBody">
+                <div id="htmlPreview" class="htmlPreview">No HTML loaded.</div>
+              </div>
             </div>
           </div>
 
@@ -155,7 +158,9 @@
           </div>
 
           <div class="box">
-            <div class="boxHead"><div class="small muted">Validation checks</div></div>
+            <div class="boxHead">
+              <div class="small muted">Validation checks</div>
+            </div>
             <div class="boxBody">
               <div class="kv">
                 <div class="k">Detected arXiv ID</div><div class="mono" id="arxivIdVal">—</div>
@@ -180,34 +185,17 @@
   </div>
 </div>
 
-<script>
-  // Tabs
-  document.querySelectorAll(".tab").forEach(t => {
-    t.addEventListener("click", () => {
-      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
-      document.querySelectorAll(".pane").forEach(p => p.classList.remove("active"));
-      t.classList.add("active");
-      document.getElementById(t.dataset.tab).classList.add("active");
-    });
-  });
+<!-- IMPORTANT: pdfjs-dist v4 is ESM (.mjs). Put ALL app JS inside module so pdfjsLib exists. -->
+<script type="module">
+  import * as pdfjsLib from "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.min.mjs";
 
-  // ---- HARD CHECK: libs loaded ----
-  const zipBadge = document.getElementById("zipBadge");
-  if (!window.JSZip) {
-    zipBadge.className = "badge bad";
-    zipBadge.textContent = "JSZip failed to load (check ./assets/jszip.min.js)";
-    throw new Error("JSZip not loaded");
-  }
-  if (!window.pdfjsLib) {
-    zipBadge.className = "badge bad";
-    zipBadge.textContent = "PDF.js failed to load (check ./assets/pdf.min.js)";
-    throw new Error("pdfjsLib not loaded");
-  }
+  // Worker (v4 uses .mjs workers too)
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
 
-  // Worker path (local)
-  pdfjsLib.GlobalWorkerOptions.workerSrc = "./assets/pdf.worker.min.js";
-
-  // ---- State ----
+  // ----------------------------
+  // State
+  // ----------------------------
   const state = {
     zip: null,
     sets: [],
@@ -215,13 +203,17 @@
     selected: null,
     pdfDoc: null,
     pdfPageNum: 1,
-    pdfPageCount: 0,
+    pdfPageCount: 0
   };
 
-  // ---- UI refs ----
+  // ----------------------------
+  // UI refs
+  // ----------------------------
   const zipInput = document.getElementById("zipInput");
   const runBtn = document.getElementById("runBtn");
   const downloadBtn = document.getElementById("downloadBtn");
+
+  const zipBadge = document.getElementById("zipBadge");
   const fileCount = document.getElementById("fileCount");
   const fileList = document.getElementById("fileList");
   const selectedSet = document.getElementById("selectedSet");
@@ -237,6 +229,7 @@
   const absVal = document.getElementById("absVal");
   const kwVal = document.getElementById("kwVal");
   const authVal = document.getElementById("authVal");
+
   const outXml = document.getElementById("outXml");
 
   const pdfCanvas = document.getElementById("pdfCanvas");
@@ -244,7 +237,38 @@
   const nextPageBtn = document.getElementById("nextPageBtn");
   const pageInfo = document.getElementById("pageInfo");
 
+  // Tabs
+  document.querySelectorAll(".tab").forEach(t => {
+    t.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".pane").forEach(p => p.classList.remove("active"));
+      t.classList.add("active");
+      document.getElementById(t.dataset.tab).classList.add("active");
+    });
+  });
+
+  // ----------------------------
+  // Helpers
+  // ----------------------------
   const lower = s => (s || "").toLowerCase();
+
+  function escapeHtml(s) {
+    return String(s ?? "").replace(/[&<>"']/g, c => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[c]));
+  }
+
+  function stripScripts(html) {
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    doc.querySelectorAll("script, iframe, object, embed").forEach(n => n.remove());
+    doc.querySelectorAll("*").forEach(el => {
+      [...el.attributes].forEach(a => {
+        if (a.name.startsWith("on")) el.removeAttribute(a.name);
+      });
+    });
+    return doc.body.innerHTML || "";
+  }
+
   const ARXIV_ID_RE = /(\d{4}\.\d{4,5})(v\d+)?/i;
 
   function extractArxivFromText(text) {
@@ -258,68 +282,89 @@
     return { id:null, version:null };
   }
 
-  function escapeHtml(s) {
-    return String(s ?? "").replace(/[&<>"']/g, c => ({
-      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
-    }[c]));
+  function badge(text, kind="") {
+    const cls = kind ? `badge ${kind}` : "badge";
+    return `<span class="${cls}">${escapeHtml(text)}</span>`;
   }
 
-  function stripScripts(html) {
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    doc.querySelectorAll("script, iframe, object, embed").forEach(n => n.remove());
-    doc.querySelectorAll("*").forEach(el => {
-      [...el.attributes].forEach(a => { if (a.name.startsWith("on")) el.removeAttribute(a.name); });
-    });
-    return doc.body.innerHTML || "";
-  }
+  function resetAll(){
+    state.zip = null;
+    state.sets = [];
+    state.selectedSetIndex = -1;
+    state.selected = null;
 
-  function clearPdf(){
-    state.pdfDoc = null;
-    state.pdfPageNum = 1;
-    state.pdfPageCount = 0;
-    pageInfo.textContent = "- / -";
-    prevPageBtn.disabled = true;
-    nextPageBtn.disabled = true;
-    const ctx = pdfCanvas.getContext("2d");
-    ctx.clearRect(0,0,pdfCanvas.width,pdfCanvas.height);
-  }
+    apiText.value = "";
+    scrapeText.value = "";
+    htmlPreview.innerHTML = "No HTML loaded.";
+    outXml.value = "";
+    downloadBtn.disabled = true;
+    runBtn.disabled = true;
 
-  async function renderPdfPage(num){
-    if (!state.pdfDoc) return;
-    const page = await state.pdfDoc.getPage(num);
-    const viewport = page.getViewport({ scale: 1.3 });
-    const ctx = pdfCanvas.getContext("2d");
-    pdfCanvas.width = viewport.width;
-    pdfCanvas.height = viewport.height;
-    await page.render({ canvasContext: ctx, viewport }).promise;
-    pageInfo.textContent = `${num} / ${state.pdfPageCount}`;
-    prevPageBtn.disabled = (num <= 1);
-    nextPageBtn.disabled = (num >= state.pdfPageCount);
-  }
+    arxivIdVal.textContent = "—";
+    versionVal.textContent = "—";
+    matchVal.innerHTML = "—";
+    titleVal.textContent = "—";
+    absVal.innerHTML = "—";
+    kwVal.innerHTML = "—";
+    authVal.innerHTML = "—";
+    selectedSet.textContent = "No set selected";
 
-  async function loadPdfFromZip(zip, name){
     clearPdf();
-    const file = zip.file(name);
-    if (!file) return;
-    const u8 = await file.async("uint8array");
-    const pdf = await pdfjsLib.getDocument({ data: u8 }).promise;
-    state.pdfDoc = pdf;
-    state.pdfPageCount = pdf.numPages;
-    state.pdfPageNum = 1;
-    await renderPdfPage(1);
+    fileList.innerHTML = "";
+    fileCount.textContent = "0";
   }
 
-  prevPageBtn.addEventListener("click", async () => {
-    if (!state.pdfDoc || state.pdfPageNum <= 1) return;
-    state.pdfPageNum -= 1;
-    await renderPdfPage(state.pdfPageNum);
-  });
-  nextPageBtn.addEventListener("click", async () => {
-    if (!state.pdfDoc || state.pdfPageNum >= state.pdfPageCount) return;
-    state.pdfPageNum += 1;
-    await renderPdfPage(state.pdfPageNum);
+  // ----------------------------
+  // ZIP Load
+  // ----------------------------
+  zipInput.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    resetAll();
+
+    zipBadge.className = "badge warn";
+    zipBadge.textContent = "Loading ZIP…";
+
+    try {
+      const buf = await file.arrayBuffer();
+      const zip = await window.JSZip.loadAsync(buf);
+      state.zip = zip;
+
+      const names = [];
+      zip.forEach((path, entry) => { if (!entry.dir) names.push(path); });
+
+      fileCount.textContent = String(names.length);
+
+      zipBadge.className = "badge good";
+      zipBadge.textContent = `ZIP loaded: ${file.name}`;
+
+      const pdfs = names.filter(n => lower(n).endsWith(".pdf"));
+      if (pdfs.length === 0) {
+        zipBadge.className = "badge bad";
+        zipBadge.textContent = "ZIP loaded but no PDF found";
+      }
+
+      state.sets = pdfs.map(pdfName => {
+        const guess = extractArxivFromText(pdfName);
+        return { key: guess.id ? guess.id : pdfName, pdfName };
+      });
+
+      renderSetList();
+      if (state.sets.length) selectSet(0);
+      runBtn.disabled = (state.sets.length === 0);
+
+    } catch (err) {
+      zipBadge.className = "badge bad";
+      zipBadge.textContent = "Failed to read ZIP";
+      console.error(err);
+      alert("ZIP failed to load. Open DevTools Console and copy the first red error.");
+    }
   });
 
+  // ----------------------------
+  // Render sets
+  // ----------------------------
   function renderSetList(){
     fileList.innerHTML = "";
     state.sets.forEach((s, idx) => {
@@ -329,25 +374,12 @@
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
           <div style="font-weight:900;font-size:13px">${escapeHtml(s.pdfName.split("/").pop())}</div>
           <span class="badge">${escapeHtml(extractArxivFromText(s.pdfName).id || "PDF")}</span>
-        </div>`;
+        </div>
+        <div class="muted" style="margin-top:6px">Auto-pairs support docs by arXiv ID (best-effort).</div>
+      `;
       div.addEventListener("click", () => selectSet(idx));
       fileList.appendChild(div);
     });
-  }
-
-  async function loadTextPreview(name, targetTextarea){
-    if (!name) { targetTextarea.value = ""; return; }
-    const file = state.zip.file(name);
-    if (!file) { targetTextarea.value = ""; return; }
-    targetTextarea.value = await file.async("string");
-  }
-
-  async function loadHtmlPreview(name){
-    if (!name) { htmlPreview.innerHTML = "No HTML loaded."; return; }
-    const file = state.zip.file(name);
-    if (!file) { htmlPreview.innerHTML = "No HTML loaded."; return; }
-    const txt = await file.async("string");
-    htmlPreview.innerHTML = stripScripts(txt) || "No HTML content.";
   }
 
   async function selectSet(idx){
@@ -358,8 +390,8 @@
     selectedSet.textContent = `Selected: ${set.pdfName.split("/").pop()}`;
 
     const names = Object.keys(state.zip.files).filter(n => !state.zip.files[n].dir);
-    let { id: guessedId } = extractArxivFromText(set.pdfName);
 
+    let { id: guessedId } = extractArxivFromText(set.pdfName);
     const pdfName = set.pdfName;
     const pdfBase = pdfName.split("/").pop().replace(/\.pdf$/i,"");
 
@@ -383,55 +415,99 @@
     const htmlName = pickBest(htmlCandidates);
 
     state.selected = { pdfName, apiName, scrapeName, htmlName };
-    runBtn.disabled = false;
 
-    await loadPdfFromZip(state.zip, pdfName);
+    await loadPdfFromZip(pdfName);
     await loadTextPreview(apiName, apiText);
     await loadTextPreview(scrapeName, scrapeText);
     await loadHtmlPreview(htmlName);
   }
 
-  zipInput.addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
+  async function loadTextPreview(name, targetTextarea){
+    if (!name) { targetTextarea.value = ""; return; }
+    const file = state.zip.file(name);
+    if (!file) { targetTextarea.value = ""; return; }
+    targetTextarea.value = await file.async("string");
+  }
+
+  async function loadHtmlPreview(name){
+    if (!name) { htmlPreview.innerHTML = "No HTML loaded."; return; }
+    const file = state.zip.file(name);
+    if (!file) { htmlPreview.innerHTML = "No HTML loaded."; return; }
+    const txt = await file.async("string");
+    htmlPreview.innerHTML = stripScripts(txt) || "No HTML content.";
+  }
+
+  // ----------------------------
+  // PDF preview
+  // ----------------------------
+  function clearPdf(){
+    state.pdfDoc = null;
+    state.pdfPageNum = 1;
+    state.pdfPageCount = 0;
+    pageInfo.textContent = "- / -";
+    prevPageBtn.disabled = true;
+    nextPageBtn.disabled = true;
+    const ctx = pdfCanvas.getContext("2d");
+    ctx.clearRect(0,0,pdfCanvas.width,pdfCanvas.height);
+  }
+
+  async function loadPdfFromZip(name){
+    clearPdf();
+    if (!name) return;
+
+    const file = state.zip.file(name);
     if (!file) return;
 
-    clearPdf();
-    zipBadge.className = "badge warn";
-    zipBadge.textContent = "Loading ZIP…";
+    const u8 = await file.async("uint8array");
+    const loadingTask = pdfjsLib.getDocument({ data: u8 });
+    const pdf = await loadingTask.promise;
 
-    try {
-      const buf = await file.arrayBuffer();
-      state.zip = await JSZip.loadAsync(buf);
+    state.pdfDoc = pdf;
+    state.pdfPageCount = pdf.numPages;
+    state.pdfPageNum = 1;
 
-      const names = [];
-      state.zip.forEach((path, entry) => { if (!entry.dir) names.push(path); });
-      fileCount.textContent = String(names.length);
+    await renderPdfPage(state.pdfPageNum);
+  }
 
-      const pdfs = names.filter(n => lower(n).endsWith(".pdf"));
-      state.sets = pdfs.map(pdfName => ({ pdfName }));
+  async function renderPdfPage(num){
+    if (!state.pdfDoc) return;
 
-      zipBadge.className = "badge good";
-      zipBadge.textContent = `ZIP loaded: ${file.name}`;
+    const page = await state.pdfDoc.getPage(num);
+    const viewport = page.getViewport({ scale: 1.3 });
 
-      renderSetList();
-      if (state.sets.length) await selectSet(0);
-      else zipBadge.textContent = "ZIP loaded but no PDF found";
+    const ctx = pdfCanvas.getContext("2d");
+    pdfCanvas.width = viewport.width;
+    pdfCanvas.height = viewport.height;
 
-    } catch (err) {
-      console.error(err);
-      zipBadge.className = "badge bad";
-      zipBadge.textContent = "Failed to read ZIP (see Console)";
-    }
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    pageInfo.textContent = `${num} / ${state.pdfPageCount}`;
+    prevPageBtn.disabled = (num <= 1);
+    nextPageBtn.disabled = (num >= state.pdfPageCount);
+  }
+
+  prevPageBtn.addEventListener("click", async () => {
+    if (!state.pdfDoc || state.pdfPageNum <= 1) return;
+    state.pdfPageNum -= 1;
+    await renderPdfPage(state.pdfPageNum);
   });
 
-  // Your extraction button can stay as-is later
+  nextPageBtn.addEventListener("click", async () => {
+    if (!state.pdfDoc || state.pdfPageNum >= state.pdfPageCount) return;
+    state.pdfPageNum += 1;
+    await renderPdfPage(state.pdfPageNum);
+  });
+
+  // ----------------------------
+  // Run Extraction (placeholder; keep your existing logic next)
+  // ----------------------------
   runBtn.addEventListener("click", () => {
-    outXml.value = "Extraction pipeline next step (ZIP + preview should work now).";
-    downloadBtn.disabled = false;
+    alert("ZIP loaded + PDF rendering works now. Next: plug extraction logic back in.");
   });
 
   downloadBtn.addEventListener("click", () => {
-    const xml = outXml.value || "";
+    const xml = outXml.value;
+    if (!xml) return;
     const blob = new Blob([xml], { type: "application/xml;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
