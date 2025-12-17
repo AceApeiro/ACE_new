@@ -1,0 +1,900 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ACE – Zip Extractor (arXiv)</title>
+
+  <!-- JSZip -->
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+  <!-- PDF.js -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.js"></script>
+
+  <style>
+    :root{
+      --bg:#0b0f14; --panel:#111827; --panel2:#0f172a; --muted:#94a3b8;
+      --text:#e5e7eb; --good:#22c55e; --bad:#ef4444; --warn:#f59e0b; --line:#1f2937;
+      --btn:#2563eb; --btn2:#334155;
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:var(--bg); color:var(--text)}
+    .wrap{max-width:1400px; margin:0 auto; padding:14px}
+    .top{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+    .card{background:linear-gradient(180deg,var(--panel),var(--panel2)); border:1px solid var(--line); border-radius:14px; padding:12px}
+    .grow{flex:1}
+    .row{display:flex; gap:12px; margin-top:12px}
+    .colL{width:320px; min-width:280px}
+    .colR{flex:1; min-width:320px}
+    .h{display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:8px}
+    .title{font-size:14px; font-weight:700}
+    .muted{color:var(--muted); font-size:12px}
+    .btn{border:0; background:var(--btn); color:white; padding:10px 12px; border-radius:10px; cursor:pointer; font-weight:700}
+    .btn.secondary{background:var(--btn2)}
+    .btn:disabled{opacity:.5; cursor:not-allowed}
+    input[type="file"]{display:none}
+    .fileLabel{display:inline-flex; gap:10px; align-items:center; border:1px dashed #334155; padding:10px 12px; border-radius:12px; cursor:pointer}
+    .list{max-height:420px; overflow:auto; border-top:1px solid var(--line); margin-top:10px; padding-top:10px}
+    .item{padding:10px; border:1px solid var(--line); border-radius:12px; margin-bottom:8px; cursor:pointer; background:#0b1220}
+    .item.active{outline:2px solid #2563eb}
+    .badge{font-size:11px; padding:3px 8px; border-radius:999px; border:1px solid var(--line); background:#0b1220}
+    .badge.good{border-color:rgba(34,197,94,.6); color:var(--good)}
+    .badge.bad{border-color:rgba(239,68,68,.6); color:var(--bad)}
+    .badge.warn{border-color:rgba(245,158,11,.6); color:var(--warn)}
+    .grid{display:grid; grid-template-columns: 1.35fr .65fr; gap:12px}
+    .tabs{display:flex; gap:8px; flex-wrap:wrap}
+    .tab{padding:8px 10px; border-radius:10px; border:1px solid var(--line); background:#0b1220; cursor:pointer; font-weight:700; font-size:12px}
+    .tab.active{border-color:#2563eb}
+    .pane{display:none}
+    .pane.active{display:block}
+    .split{display:grid; grid-template-columns: 1fr 1fr; gap:12px}
+    .box{border:1px solid var(--line); border-radius:12px; overflow:hidden; background:#050a12}
+    .boxHead{padding:8px 10px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between}
+    .boxBody{padding:10px}
+    textarea{width:100%; min-height:220px; background:#050a12; color:var(--text); border:1px solid var(--line); border-radius:12px; padding:10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size:12px}
+    .kv{display:grid; grid-template-columns: 160px 1fr; gap:8px; font-size:13px}
+    .k{color:var(--muted)}
+    .statusLine{display:flex; gap:8px; flex-wrap:wrap; align-items:center}
+    canvas{width:100%; height:auto; background:#0b1220; border-radius:10px}
+    .htmlPreview{max-height:520px; overflow:auto; background:white; color:black; border-radius:10px; padding:10px}
+    .small{font-size:12px}
+    .hr{height:1px; background:var(--line); margin:10px 0}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace}
+  </style>
+</head>
+
+<body>
+<div class="wrap">
+
+  <div class="top card">
+    <div class="grow">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:16px;font-weight:900;letter-spacing:.2px">ACE – Apeiro Citation Extractor (arXiv ZIP)</div>
+          <div class="muted">Upload a ZIP containing PDF + API XML + Scraping XML + HTML summary. Validate arXiv ID/version, pick title, generate XML.</div>
+        </div>
+
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label class="fileLabel">
+            <span class="badge">ZIP</span>
+            <span class="small">Choose ZIP</span>
+            <input id="zipInput" type="file" accept=".zip" />
+          </label>
+
+          <button id="runBtn" class="btn" disabled>Run Extraction</button>
+          <button id="downloadBtn" class="btn secondary" disabled>Download XML</button>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="statusLine">
+        <span class="badge" id="zipBadge">No ZIP loaded</span>
+        <span class="badge warn" id="caseBadge" style="display:none">Case: not grouped</span>
+        <span class="muted" id="hint">Tip: file names can be anything; ACE will auto-detect by extension + content.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <!-- LEFT: file list -->
+    <div class="colL card">
+      <div class="h">
+        <div class="title">Files in ZIP</div>
+        <div class="muted" id="fileCount">0</div>
+      </div>
+
+      <div class="muted">Select a file set (PDF). ACE tries to auto-pair support docs.</div>
+      <div class="list" id="fileList"></div>
+    </div>
+
+    <!-- RIGHT: preview + extraction -->
+    <div class="colR">
+      <div class="grid">
+
+        <!-- PREVIEW -->
+        <div class="card">
+          <div class="h">
+            <div class="title">Preview</div>
+            <div class="tabs">
+              <div class="tab active" data-tab="pdfPane">PDF</div>
+              <div class="tab" data-tab="htmlPane">HTML Summary</div>
+              <div class="tab" data-tab="apiPane">API XML</div>
+              <div class="tab" data-tab="scrapePane">Scrape XML</div>
+            </div>
+          </div>
+
+          <div id="pdfPane" class="pane active">
+            <div class="box">
+              <div class="boxHead">
+                <div class="small muted">PDF rendered via PDF.js (no Chrome “blocked” iframe issue)</div>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <button class="btn secondary" id="prevPageBtn" disabled>Prev</button>
+                  <span class="badge mono" id="pageInfo">- / -</span>
+                  <button class="btn secondary" id="nextPageBtn" disabled>Next</button>
+                </div>
+              </div>
+              <div class="boxBody">
+                <canvas id="pdfCanvas"></canvas>
+              </div>
+            </div>
+          </div>
+
+          <div id="htmlPane" class="pane">
+            <div class="box">
+              <div class="boxHead">
+                <div class="small muted">HTML is sanitized before display (scripts removed).</div>
+              </div>
+              <div class="boxBody">
+                <div id="htmlPreview" class="htmlPreview">No HTML loaded.</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="apiPane" class="pane">
+            <textarea id="apiText" readonly placeholder="API XML preview..."></textarea>
+          </div>
+
+          <div id="scrapePane" class="pane">
+            <textarea id="scrapeText" readonly placeholder="Scrape XML preview..."></textarea>
+          </div>
+        </div>
+
+        <!-- EXTRACTION STATUS + OUTPUT -->
+        <div class="card">
+          <div class="h">
+            <div class="title">Extraction</div>
+            <span class="badge" id="selectedSet">No set selected</span>
+          </div>
+
+          <div class="box">
+            <div class="boxHead">
+              <div class="small muted">Validation checks (ARXIV ID/version/title/authors)</div>
+            </div>
+            <div class="boxBody">
+              <div class="kv">
+                <div class="k">Detected arXiv ID</div><div class="mono" id="arxivIdVal">—</div>
+                <div class="k">Detected version</div><div class="mono" id="versionVal">—</div>
+                <div class="k">ID/Version match</div><div id="matchVal">—</div>
+                <div class="k">Chosen title</div><div id="titleVal">—</div>
+                <div class="k">Abstract found?</div><div id="absVal">—</div>
+                <div class="k">Keywords found?</div><div id="kwVal">—</div>
+                <div class="k">Authors check</div><div id="authVal">—</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="hr"></div>
+
+          <div class="title" style="margin-bottom:8px">Generated XML</div>
+          <textarea id="outXml" placeholder="Run Extraction to generate XML..." spellcheck="false"></textarea>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ----------------------------
+  // PDF.js setup
+  // ----------------------------
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.js";
+
+  // ----------------------------
+  // State
+  // ----------------------------
+  const state = {
+    zip: null,
+    entries: [], // {name, file}
+    sets: [],    // grouped by arxiv id
+    selectedSetIndex: -1,
+    selected: null, // {pdf, html, api, scrape}
+    pdfDoc: null,
+    pdfPageNum: 1,
+    pdfPageCount: 0,
+    pdfBlobUrl: null
+  };
+
+  // ----------------------------
+  // UI refs
+  // ----------------------------
+  const zipInput = document.getElementById("zipInput");
+  const runBtn = document.getElementById("runBtn");
+  const downloadBtn = document.getElementById("downloadBtn");
+
+  const zipBadge = document.getElementById("zipBadge");
+  const fileCount = document.getElementById("fileCount");
+  const fileList = document.getElementById("fileList");
+  const selectedSet = document.getElementById("selectedSet");
+
+  const apiText = document.getElementById("apiText");
+  const scrapeText = document.getElementById("scrapeText");
+  const htmlPreview = document.getElementById("htmlPreview");
+
+  const arxivIdVal = document.getElementById("arxivIdVal");
+  const versionVal = document.getElementById("versionVal");
+  const matchVal = document.getElementById("matchVal");
+  const titleVal = document.getElementById("titleVal");
+  const absVal = document.getElementById("absVal");
+  const kwVal = document.getElementById("kwVal");
+  const authVal = document.getElementById("authVal");
+
+  const outXml = document.getElementById("outXml");
+
+  const pdfCanvas = document.getElementById("pdfCanvas");
+  const prevPageBtn = document.getElementById("prevPageBtn");
+  const nextPageBtn = document.getElementById("nextPageBtn");
+  const pageInfo = document.getElementById("pageInfo");
+
+  // Tabs
+  document.querySelectorAll(".tab").forEach(t => {
+    t.addEventListener("click", () => {
+      document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+      document.querySelectorAll(".pane").forEach(p => p.classList.remove("active"));
+      t.classList.add("active");
+      document.getElementById(t.dataset.tab).classList.add("active");
+    });
+  });
+
+  // ----------------------------
+  // Helpers
+  // ----------------------------
+  const lower = s => (s || "").toLowerCase();
+
+  function badge(text, kind="") {
+    const cls = kind ? `badge ${kind}` : "badge";
+    return `<span class="${cls}">${escapeHtml(text)}</span>`;
+  }
+
+  function escapeHtml(s) {
+    return String(s ?? "").replace(/[&<>"']/g, c => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[c]));
+  }
+
+  function stripScripts(html) {
+    // Remove scripts + inline event handlers for safe preview inside Google Sites
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    doc.querySelectorAll("script, iframe, object, embed").forEach(n => n.remove());
+    doc.querySelectorAll("*").forEach(el => {
+      [...el.attributes].forEach(a => {
+        if (a.name.startsWith("on")) el.removeAttribute(a.name);
+      });
+    });
+    return doc.body.innerHTML || "";
+  }
+
+  // arXiv ID formats we may encounter:
+  // - arXiv:2511.16743v1
+  // - 2511.16743v1
+  // - identifier: oai:arXiv.org:2511.16743
+  const ARXIV_ID_RE = /(\d{4}\.\d{4,5})(v\d+)?/i;
+
+  function extractArxivFromText(text) {
+    if (!text) return { id:null, version:null };
+
+    // Prefer explicit "arXiv:" if present
+    const m1 = /arxiv:\s*(\d{4}\.\d{4,5})(v\d+)?/i.exec(text);
+    if (m1) return { id: m1[1], version: (m1[2]||null) };
+
+    // OAI identifier
+    const m2 = /oai:arxiv\.org:(\d{4}\.\d{4,5})/i.exec(text);
+    if (m2) return { id: m2[1], version: null };
+
+    // Generic
+    const m3 = ARXIV_ID_RE.exec(text);
+    if (m3) return { id: m3[1], version: (m3[2]||null) };
+
+    return { id:null, version:null };
+  }
+
+  function normalizeTitle(s) {
+    return (s || "")
+      .replace(/\s+/g, " ")
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .trim();
+  }
+
+  function removeTitleIndicators(s) {
+    // Remove "Preprint" and trailing "*" (your rules)
+    let t = normalizeTitle(s);
+    t = t.replace(/\bpreprint\b/ig, "").trim();
+    t = t.replace(/\*+\s*$/g, "").trim();
+    // Remove leading/trailing superscript markers often appended weirdly (safe minimal)
+    t = t.replace(/^[\s\^*†‡]+/g, "").replace(/[\s\^*†‡]+$/g, "");
+    return t;
+  }
+
+  function isTotallyDifferentTitle(a, b) {
+    // Heuristic: compare token overlap. If overlap very low, treat "totally different".
+    const ta = new Set(removeTitleIndicators(a).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+    const tb = new Set(removeTitleIndicators(b).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+    if (!ta.size || !tb.size) return true;
+    let inter = 0;
+    ta.forEach(x => { if (tb.has(x)) inter++; });
+    const overlap = inter / Math.min(ta.size, tb.size);
+    return overlap < 0.35;
+  }
+
+  function isRealMismatchTitle(pdfTitle, htmlTitle) {
+    // Your rule: even hyphen difference counts as mismatch.
+    // BUT do not treat "$...$" wrappers as mismatch if structure same.
+    const a = removeTitleIndicators(pdfTitle);
+    const b = removeTitleIndicators(htmlTitle);
+
+    // Remove math wrappers like $5$ or $z > 6$ style (common on HTML) but keep inner
+    const stripDollarWrap = s => s.replace(/\$([^$]+)\$/g, "$1");
+
+    const a2 = stripDollarWrap(a);
+    const b2 = stripDollarWrap(b);
+
+    // If exact match after minimal normalization → not mismatch
+    if (normalizeTitle(a2) === normalizeTitle(b2)) return false;
+
+    // If only whitespace differs → not mismatch
+    if (normalizeTitle(a2).replace(/\s/g,"") === normalizeTitle(b2).replace(/\s/g,"")) return false;
+
+    // If punctuation/hyphen differs → treat as mismatch (your rule)
+    return true;
+  }
+
+  function chooseTitle(pdfTitle, htmlTitle) {
+    const p = removeTitleIndicators(pdfTitle || "");
+    const h = removeTitleIndicators(htmlTitle || "");
+
+    if (!p && h) return { chosen:h, source:"HTML (only)" };
+    if (!h && p) return { chosen:p, source:"PDF (only)" };
+    if (!p && !h) return { chosen:"", source:"None" };
+
+    // Exception: if totally different → capture from HTML
+    if (isTotallyDifferentTitle(p, h)) {
+      return { chosen:h, source:"HTML (totally different)" };
+    }
+
+    // If mismatch in any way (including hyphen difference) → choose HTML
+    if (isRealMismatchTitle(p, h)) {
+      return { chosen:h, source:"HTML (mismatch)" };
+    }
+
+    // Otherwise choose the more complete (longer) one
+    return (p.length >= h.length)
+      ? { chosen:p, source:"PDF (more complete)" }
+      : { chosen:h, source:"HTML (more complete)" };
+  }
+
+  function xmlText(node, tagName) {
+    const el = node.getElementsByTagName(tagName)[0];
+    return el ? el.textContent.trim() : "";
+  }
+
+  function parseApiXml(xmlStr) {
+    const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
+    const id = xmlText(doc, "id");
+    const title = xmlText(doc, "title");
+    const abstract = xmlText(doc, "abstract");
+    const authors = [...doc.getElementsByTagName("author")].map(a => ({
+      keyname: xmlText(a, "keyname"),
+      forenames: xmlText(a, "forenames")
+    }));
+    return { id, title, abstract, authors };
+  }
+
+  function parseScrapeXml(xmlStr) {
+    const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
+    const item = doc.getElementsByTagName("item")[0];
+    const id = item?.getAttribute("id") || "";
+    const v = doc.getElementsByTagName("version")[0];
+    let version = "";
+    if (v) {
+      const number = v.getAttribute("number") || ""; // like [v1]
+      const m = /\[v(\d+)\]/i.exec(number);
+      if (m) version = "v" + m[1];
+    }
+    return { id, version };
+  }
+
+  function parseHtmlLanding(htmlStr) {
+    const doc = new DOMParser().parseFromString(htmlStr, "text/html");
+    // arXiv title appears like: Title:SafeR-CLIP: ...
+    // Try robust:
+    let title = "";
+    const titleLabel = [...doc.querySelectorAll("h1, h2, b, strong, td, div, span, p")]
+      .find(el => /title\s*:/i.test(el.textContent));
+    if (titleLabel) {
+      const txt = titleLabel.textContent;
+      const m = /title\s*:\s*(.+)$/i.exec(txt);
+      if (m) title = m[1].trim();
+    }
+    // If that failed, try meta / document title
+    if (!title) {
+      title = (doc.querySelector('meta[name="citation_title"]')?.getAttribute("content") || "").trim();
+    }
+    if (!title) {
+      title = (doc.title || "").trim();
+      // doc.title often includes arXiv etc; keep if that's all we have
+    }
+
+    // arXiv id + version from "arXiv:.... (or arXiv:...v1 ...)"
+    const bodyText = doc.body?.textContent || "";
+    const { id, version } = extractArxivFromText(bodyText);
+
+    // Abstract: look for "Abstract:" or headings synonyms
+    // We'll treat as found if we can find any of those headings
+    const absHeadings = ["abstract","summary","synopsis","summary and conclusions"];
+    let abstract = "";
+    const fullText = bodyText.replace(/\s+/g," ").trim();
+
+    for (const h of absHeadings) {
+      const re = new RegExp(`\\b${h}\\b\\s*:?\\s*`, "i");
+      const idx = fullText.toLowerCase().indexOf(h);
+      if (idx !== -1) {
+        // crude slice after first occurrence
+        const slice = fullText.slice(idx);
+        // Stop at "Comments:" or "Subjects:" or "Cite as:" etc
+        const stop = slice.search(/\b(comments|subjects|cite as|submission history|full-text links)\b/i);
+        abstract = (stop > 0 ? slice.slice(0, stop) : slice).replace(re, "").trim();
+        break;
+      }
+    }
+
+    return { id, version, title, abstract, sanitizedHtml: stripScripts(htmlStr) };
+  }
+
+  // Keywords: simple PDF-text-based keywords are hard without OCR.
+  // For now: detect "Keywords" section from HTML abstract page if present.
+  function detectKeywordsFromText(text) {
+    if (!text) return [];
+    // Find "Keywords" line and split on common separators (not spaces)
+    const m = /keywords?\s*[:\-]\s*(.+)/i.exec(text);
+    if (!m) return [];
+    const raw = m[1].trim();
+    // stop at line break-ish keywords
+    const stop = raw.split(/\b(abstract|introduction)\b/i)[0].trim();
+    // split on separators (semicolon, comma, dot, dash, etc.) but not spaces
+    const parts = stop.split(/[;•,\u2022|·\u00b7\/]+/).map(s => s.trim()).filter(Boolean);
+    return parts;
+  }
+
+  function buildElsevierXml({ arxivIdWithVersion, chosenTitle, abstractText, keywords, authors }) {
+    // Minimal valid-ish skeleton matching your sample structure.
+    // NOTE: Full author/affiliation logic is huge; this is the scaffold that you extend part-by-part.
+    const esc = s => escapeXml(String(s||""));
+    function escapeXml(s){
+      return s.replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
+    }
+
+    const nowIso = new Date().toISOString();
+
+    const kwXml = keywords?.length
+      ? `<author-keywords>\n${keywords.map(k => `              <author-keyword>${esc(k)}</author-keyword>`).join("\n")}\n            </author-keywords>\n`
+      : "";
+
+    const authorsXml = (authors || []).map((a, i) => {
+      // For now: initials from forenames first letters, surname from keyname, given-name from forenames.
+      const given = a.forenames || "";
+      const surname = a.keyname || "";
+      const initials = given
+        .split(/\s+/).filter(Boolean)
+        .map(x => x[0].toUpperCase() + ".")
+        .join("");
+      return `            <author seq="${i+1}">
+              <ce:initials>${esc(initials || "")}</ce:initials>
+              <ce:surname>${esc(surname)}</ce:surname>
+              <ce:given-name>${esc(given)}</ce:given-name>
+            </author>`;
+    }).join("\n");
+
+    // Abstract: replace complex items placeholders here (later you will implement detection).
+    const absXml = abstractText
+      ? `          <abstracts>
+            <abstract original="y" xml:lang="ENG">
+              <ce:para>${esc(abstractText)}</ce:para>
+            </abstract>
+          </abstracts>\n`
+      : "";
+
+    return `<?xml version="1.0" encoding="utf-8"?>
+<units xmlns="http://www.elsevier.com/xml/ani/ani" xmlns:ce="http://www.elsevier.com/xml/ani/common">
+  <unit type="ARTICLE">
+    <unit-info>
+      <unit-id>1</unit-id>
+      <order-id>unknown</order-id>
+      <parcel-id>none</parcel-id>
+      <supplier-id>4</supplier-id>
+      <timestamp>${esc(nowIso)}</timestamp>
+    </unit-info>
+    <unit-content>
+      <bibrecord>
+        <item-info>
+          <status state="new"/>
+          <itemidlist>
+            <itemid idtype="ARXIV">${esc(arxivIdWithVersion)}</itemid>
+          </itemidlist>
+        </item-info>
+        <head>
+          <citation-info>
+            <citation-type code="ar"/>
+            <citation-language xml:lang="ENG"/>
+            <abstract-language xml:lang="ENG"/>
+${kwXml}          </citation-info>
+          <citation-title>
+            <titletext xml:lang="ENG" original="y">${esc(chosenTitle)}</titletext>
+          </citation-title>
+          <author-group seq="1">
+${authorsXml || "            <!-- No authors parsed -->"}
+          </author-group>
+${absXml}          <source srcid="???"/>
+        </head>
+        <tail>
+          <bibliography refcount="0"/>
+        </tail>
+      </bibrecord>
+    </unit-content>
+  </unit>
+</units>`;
+  }
+
+  // ----------------------------
+  // ZIP Load
+  // ----------------------------
+  zipInput.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    resetAll();
+
+    zipBadge.className = "badge warn";
+    zipBadge.textContent = "Loading ZIP…";
+
+    try {
+      const buf = await file.arrayBuffer();
+      const zip = await JSZip.loadAsync(buf);
+      state.zip = zip;
+
+      const names = [];
+      zip.forEach((path, entry) => {
+        if (!entry.dir) names.push(path);
+      });
+
+      state.entries = names.map(name => ({ name }));
+      fileCount.textContent = String(state.entries.length);
+
+      zipBadge.className = "badge good";
+      zipBadge.textContent = `ZIP loaded: ${file.name}`;
+
+      // Build "sets": group by arXiv id extracted from filename if possible
+      // If not possible, we still allow manual selection by PDF and auto-pair.
+      const pdfs = names.filter(n => lower(n).endsWith(".pdf"));
+      if (pdfs.length === 0) {
+        zipBadge.className = "badge bad";
+        zipBadge.textContent = "ZIP loaded but no PDF found";
+      }
+
+      state.sets = pdfs.map(pdfName => {
+        const guess = extractArxivFromText(pdfName);
+        return {
+          key: guess.id ? guess.id : pdfName,
+          pdfName
+        };
+      });
+
+      renderSetList();
+      if (state.sets.length) selectSet(0);
+
+    } catch (err) {
+      zipBadge.className = "badge bad";
+      zipBadge.textContent = "Failed to read ZIP";
+      console.error(err);
+    }
+  });
+
+  function resetAll(){
+    state.entries = [];
+    state.sets = [];
+    state.selectedSetIndex = -1;
+    state.selected = null;
+
+    apiText.value = "";
+    scrapeText.value = "";
+    htmlPreview.innerHTML = "No HTML loaded.";
+    outXml.value = "";
+    downloadBtn.disabled = true;
+    runBtn.disabled = true;
+
+    arxivIdVal.textContent = "—";
+    versionVal.textContent = "—";
+    matchVal.innerHTML = "—";
+    titleVal.textContent = "—";
+    absVal.innerHTML = "—";
+    kwVal.innerHTML = "—";
+    authVal.innerHTML = "—";
+    selectedSet.textContent = "No set selected";
+
+    clearPdf();
+    fileList.innerHTML = "";
+    fileCount.textContent = "0";
+  }
+
+  // ----------------------------
+  // Render sets
+  // ----------------------------
+  function renderSetList(){
+    fileList.innerHTML = "";
+    state.sets.forEach((s, idx) => {
+      const div = document.createElement("div");
+      div.className = "item" + (idx === state.selectedSetIndex ? " active" : "");
+      div.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div style="font-weight:900;font-size:13px">${escapeHtml(s.pdfName.split("/").pop())}</div>
+          <span class="badge">${escapeHtml(extractArxivFromText(s.pdfName).id || "PDF")}</span>
+        </div>
+        <div class="muted" style="margin-top:6px">Auto-pairs support docs by arXiv ID (best-effort).</div>
+      `;
+      div.addEventListener("click", () => selectSet(idx));
+      fileList.appendChild(div);
+    });
+  }
+
+  async function selectSet(idx){
+    state.selectedSetIndex = idx;
+    renderSetList();
+
+    const set = state.sets[idx];
+    selectedSet.textContent = `Selected: ${set.pdfName.split("/").pop()}`;
+
+    const names = Object.keys(state.zip.files).filter(n => !state.zip.files[n].dir);
+
+    // Detect arxiv id from PDF filename or from API/HTML later
+    let { id: guessedId } = extractArxivFromText(set.pdfName);
+
+    // Find likely support docs
+    const pdfName = set.pdfName;
+    const pdfBase = pdfName.split("/").pop().replace(/\.pdf$/i,"");
+
+    const apiCandidates = names.filter(n =>
+      lower(n).endsWith(".xml") && /oai|record|arxiv|oaipmh/i.test(n)
+    );
+    const scrapeCandidates = names.filter(n =>
+      lower(n).endsWith(".xml") && /scrap|scrape|arxiv/i.test(n) && !/oai|record|oaipmh/i.test(n)
+    );
+    const htmlCandidates = names.filter(n => lower(n).endsWith(".html") || lower(n).endsWith(".htm"));
+
+    // Prefer those containing guessedId; else fallback to closest name match.
+    const pickBest = (cands) => {
+      if (!cands.length) return null;
+      if (guessedId) {
+        const m = cands.find(n => n.includes(guessedId));
+        if (m) return m;
+      }
+      // fallback: match pdfBase
+      const m2 = cands.find(n => lower(n).includes(lower(pdfBase)));
+      if (m2) return m2;
+      // else first
+      return cands[0];
+    };
+
+    const apiName = pickBest(apiCandidates);
+    const scrapeName = pickBest(scrapeCandidates);
+    const htmlName = pickBest(htmlCandidates);
+
+    state.selected = { pdfName, apiName, scrapeName, htmlName };
+
+    // Load previews (best effort)
+    runBtn.disabled = false;
+
+    await loadPdfFromZip(pdfName);
+    await loadTextPreview(apiName, apiText);
+    await loadTextPreview(scrapeName, scrapeText);
+    await loadHtmlPreview(htmlName);
+  }
+
+  async function loadTextPreview(name, targetTextarea){
+    if (!name) { targetTextarea.value = ""; return; }
+    const file = state.zip.file(name);
+    if (!file) { targetTextarea.value = ""; return; }
+    const txt = await file.async("string");
+    targetTextarea.value = txt;
+  }
+
+  async function loadHtmlPreview(name){
+    if (!name) { htmlPreview.innerHTML = "No HTML loaded."; return; }
+    const file = state.zip.file(name);
+    if (!file) { htmlPreview.innerHTML = "No HTML loaded."; return; }
+    const txt = await file.async("string");
+    htmlPreview.innerHTML = stripScripts(txt) || "No HTML content.";
+  }
+
+  // ----------------------------
+  // PDF preview (PDF.js)
+  // ----------------------------
+  function clearPdf(){
+    state.pdfDoc = null;
+    state.pdfPageNum = 1;
+    state.pdfPageCount = 0;
+    pageInfo.textContent = "- / -";
+    prevPageBtn.disabled = true;
+    nextPageBtn.disabled = true;
+    const ctx = pdfCanvas.getContext("2d");
+    ctx.clearRect(0,0,pdfCanvas.width,pdfCanvas.height);
+  }
+
+  async function loadPdfFromZip(name){
+    clearPdf();
+    if (!name) return;
+
+    const file = state.zip.file(name);
+    if (!file) return;
+
+    const u8 = await file.async("uint8array");
+    const loadingTask = pdfjsLib.getDocument({ data: u8 });
+    const pdf = await loadingTask.promise;
+    state.pdfDoc = pdf;
+    state.pdfPageCount = pdf.numPages;
+    state.pdfPageNum = 1;
+
+    prevPageBtn.disabled = false;
+    nextPageBtn.disabled = false;
+
+    await renderPdfPage(state.pdfPageNum);
+  }
+
+  async function renderPdfPage(num){
+    if (!state.pdfDoc) return;
+    const page = await state.pdfDoc.getPage(num);
+
+    // Scale to fit
+    const viewport = page.getViewport({ scale: 1.3 });
+    const ctx = pdfCanvas.getContext("2d");
+    pdfCanvas.width = viewport.width;
+    pdfCanvas.height = viewport.height;
+
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    pageInfo.textContent = `${num} / ${state.pdfPageCount}`;
+    prevPageBtn.disabled = (num <= 1);
+    nextPageBtn.disabled = (num >= state.pdfPageCount);
+  }
+
+  prevPageBtn.addEventListener("click", async () => {
+    if (!state.pdfDoc || state.pdfPageNum <= 1) return;
+    state.pdfPageNum -= 1;
+    await renderPdfPage(state.pdfPageNum);
+  });
+
+  nextPageBtn.addEventListener("click", async () => {
+    if (!state.pdfDoc || state.pdfPageNum >= state.pdfPageCount) return;
+    state.pdfPageNum += 1;
+    await renderPdfPage(state.pdfPageNum);
+  });
+
+  // ----------------------------
+  // Run Extraction
+  // ----------------------------
+  runBtn.addEventListener("click", async () => {
+    if (!state.selected) return;
+
+    // Read raw texts
+    const apiRaw = apiText.value || "";
+    const scrapeRaw = scrapeText.value || "";
+    const htmlRaw = (state.selected.htmlName ? await state.zip.file(state.selected.htmlName).async("string") : "");
+
+    // Parse support docs
+    let api = null, scrape = null, html = null;
+
+    try { api = apiRaw ? parseApiXml(apiRaw) : null; } catch(e){ api = null; }
+    try { scrape = scrapeRaw ? parseScrapeXml(scrapeRaw) : null; } catch(e){ scrape = null; }
+    try { html = htmlRaw ? parseHtmlLanding(htmlRaw) : null; } catch(e){ html = null; }
+
+    // arXiv ID + version resolution (your rule: match across 3 docs; PDF version sometimes suggests none)
+    const apiId = api?.id || "";
+    const scrapeId = scrape?.id || "";
+    const htmlId = html?.id || "";
+
+    // Version:
+    // - Scrape has v1 via [v1]
+    // - HTML might include v1 in text
+    // - API doesn't directly include v1; we infer "vN" if updated? (not reliable)
+    // We enforce: scrape version == html version if HTML has version. Otherwise require scrape version present.
+    const scrapeVer = scrape?.version || "";
+    const htmlVer = html?.version || "";
+
+    // Determine final arxivId + version
+    const finalId = (apiId || scrapeId || htmlId || extractArxivFromText(state.selected.pdfName).id || "").trim();
+    let finalVer = (htmlVer || scrapeVer || "").trim();
+
+    // Validate match logic (strict)
+    const ids = [apiId, scrapeId, htmlId].filter(Boolean);
+    const idAllSame = ids.length ? ids.every(x => x === ids[0]) : false;
+    let verOk = true;
+
+    // If HTML has explicit version, require it matches scrape version
+    if (htmlVer && scrapeVer && htmlVer !== scrapeVer) verOk = false;
+    // If HTML has no version, still require scrape version exists (so we can build XML idtype)
+    if (!htmlVer && !scrapeVer) verOk = false;
+
+    const matchOk = (!!finalId) && idAllSame && verOk;
+
+    // Title logic: PDF title extraction is hard without text layer; we’ll use API title as "PDF proxy" for now
+    // (you will replace this later with true PDF extraction).
+    const pdfTitleProxy = api?.title || "";
+    const htmlTitle = html?.title || "";
+
+    const titlePick = chooseTitle(pdfTitleProxy, htmlTitle);
+    const chosenTitle = titlePick.chosen;
+
+    // Abstract: prefer API abstract; if missing, try HTML extracted abstract synonyms
+    const absText = (api?.abstract || html?.abstract || "").trim();
+    const absFound = !!absText;
+
+    // Keywords: best-effort from HTML text (you’ll replace later with PDF parsing)
+    const kw = detectKeywordsFromText(htmlRaw);
+
+    // Authors check (baseline): compare API authors count > 0
+    // Real PDF-vs-API sequence check requires PDF text extraction (next feature).
+    const authors = api?.authors || [];
+    const authorsOk = authors.length > 0;
+
+    // Update UI
+    arxivIdVal.textContent = finalId || "—";
+    versionVal.textContent = finalVer || "—";
+
+    matchVal.innerHTML = matchOk ? badge("OK – IDs & versions match", "good") : badge("HOLD – Version/ID mismatch", "bad");
+
+    titleVal.textContent = chosenTitle ? `${chosenTitle}  (${titlePick.source})` : "—";
+    absVal.innerHTML = absFound ? badge("Yes", "good") : badge("No (not present / not found)", "warn");
+    kwVal.innerHTML = kw.length ? badge(`${kw.length} keyword(s)`, "good") : badge("None detected", "warn");
+    authVal.innerHTML = authorsOk ? badge(`API authors: ${authors.length} (PDF compare pending)`, "warn") : badge("No authors parsed from API", "bad");
+
+    // If mismatch, still generate XML but clearly you can hold in workflow.
+    const arxivIdWithVersion = (finalId && finalVer) ? `${finalId}${finalVer}` : (finalId || "");
+
+    const xml = buildElsevierXml({
+      arxivIdWithVersion,
+      chosenTitle: chosenTitle || "",
+      abstractText: absText || "",
+      keywords: kw,
+      authors
+    });
+
+    outXml.value = xml;
+    downloadBtn.disabled = !xml;
+  });
+
+  downloadBtn.addEventListener("click", () => {
+    const xml = outXml.value;
+    if (!xml) return;
+    const blob = new Blob([xml], { type: "application/xml;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `ACE_${Date.now()}_arxiv.xml`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  });
+
+</script>
+</body>
+</html>
