@@ -5,8 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>ACE – Zip Extractor (arXiv)</title>
 
-  <!-- JSZip (UMD global: window.JSZip) -->
+  <!-- JSZip -->
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+
+  <!-- PDF.js (cdnjs version that exposes window.pdfjsLib reliably) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
   <style>
     :root{
@@ -67,7 +70,7 @@
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <div>
           <div style="font-size:16px;font-weight:900;letter-spacing:.2px">ACE – Apeiro Citation Extractor (arXiv ZIP)</div>
-          <div class="muted">Upload a ZIP containing PDF + API XML + Scraping XML + HTML summary.</div>
+          <div class="muted">Upload a ZIP containing PDF + API XML + Scraping XML + HTML summary. Validate arXiv ID/version, pick title, generate XML.</div>
         </div>
 
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -86,24 +89,28 @@
 
       <div class="statusLine">
         <span class="badge" id="zipBadge">No ZIP loaded</span>
-        <span class="muted" id="hint">If API/Scrape doesn’t show, your XML might be different format — tell me and we’ll adjust.</span>
+        <span class="muted" id="hint">Tip: open DevTools Console if something doesn’t load.</span>
       </div>
     </div>
   </div>
 
   <div class="row">
+    <!-- LEFT -->
     <div class="colL card">
       <div class="h">
-        <div class="title">Files in ZIP</div>
+        <div class="title">PDFs in ZIP</div>
         <div class="muted" id="fileCount">0</div>
       </div>
-      <div class="muted">Select a PDF. ACE will try to auto-pair support docs by content.</div>
+
+      <div class="muted">Select a PDF. ACE auto-pairs support docs by reading their content.</div>
       <div class="list" id="fileList"></div>
     </div>
 
+    <!-- RIGHT -->
     <div class="colR">
       <div class="grid">
 
+        <!-- PREVIEW -->
         <div class="card">
           <div class="h">
             <div class="title">Preview</div>
@@ -134,7 +141,7 @@
           <div id="htmlPane" class="pane">
             <div class="box">
               <div class="boxHead">
-                <div class="small muted">HTML sanitized before display.</div>
+                <div class="small muted">HTML is sanitized (scripts removed).</div>
               </div>
               <div class="boxBody">
                 <div id="htmlPreview" class="htmlPreview">No HTML loaded.</div>
@@ -151,6 +158,7 @@
           </div>
         </div>
 
+        <!-- EXTRACTION -->
         <div class="card">
           <div class="h">
             <div class="title">Extraction</div>
@@ -185,19 +193,21 @@
   </div>
 </div>
 
-<script type="module">
-  import * as pdfjsLib from "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.min.mjs";
+<script>
+  // --- PDF.js worker ---
+  // MUST match the same major/minor as pdf.min.js above (3.11.174)
   pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
   // ----------------------------
   // State
   // ----------------------------
   const state = {
     zip: null,
-    sets: [],
-    selectedSetIndex: -1,
-    selected: null, // {pdfName, apiName, scrapeName, htmlName}
+    fileNames: [],
+    pdfs: [],
+    selectedPdf: null,
+    selected: { pdfName:null, apiName:null, scrapeName:null, htmlName:null },
     pdfDoc: null,
     pdfPageNum: 1,
     pdfPageCount: 0
@@ -226,6 +236,7 @@
   const absVal = document.getElementById("absVal");
   const kwVal = document.getElementById("kwVal");
   const authVal = document.getElementById("authVal");
+
   const outXml = document.getElementById("outXml");
 
   const pdfCanvas = document.getElementById("pdfCanvas");
@@ -254,15 +265,18 @@
     }[c]));
   }
 
-  function escapeXml(s){
-    return String(s ?? "").replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
+  function badge(text, kind="") {
+    const cls = kind ? `badge ${kind}` : "badge";
+    return `<span class="${cls}">${escapeHtml(text)}</span>`;
   }
 
   function stripScripts(html) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     doc.querySelectorAll("script, iframe, object, embed").forEach(n => n.remove());
     doc.querySelectorAll("*").forEach(el => {
-      [...el.attributes].forEach(a => { if (a.name.startsWith("on")) el.removeAttribute(a.name); });
+      [...el.attributes].forEach(a => {
+        if (a.name.startsWith("on")) el.removeAttribute(a.name);
+      });
     });
     return doc.body.innerHTML || "";
   }
@@ -280,246 +294,15 @@
     return { id:null, version:null };
   }
 
-  function badge(text, kind="") {
-    const cls = kind ? `badge ${kind}` : "badge";
-    return `<span class="${cls}">${escapeHtml(text)}</span>`;
-  }
-
-  function resetAll(){
-    state.zip = null;
-    state.sets = [];
-    state.selectedSetIndex = -1;
-    state.selected = null;
-
-    apiText.value = "";
-    scrapeText.value = "";
-    htmlPreview.innerHTML = "No HTML loaded.";
-    outXml.value = "";
-    downloadBtn.disabled = true;
-    runBtn.disabled = true;
-
-    arxivIdVal.textContent = "—";
-    versionVal.textContent = "—";
-    matchVal.innerHTML = "—";
-    titleVal.textContent = "—";
-    absVal.innerHTML = "—";
-    kwVal.innerHTML = "—";
-    authVal.innerHTML = "—";
-    selectedSet.textContent = "No set selected";
-
-    clearPdf();
-    fileList.innerHTML = "";
-    fileCount.textContent = "0";
-  }
-
-  // ----------------------------
-  // XML sniffing (fixes “API not showing”)
-  // ----------------------------
-  function looksLikeApiXml(txt){
-    const t = txt.slice(0, 5000);
-    return /<feed\b/i.test(t) || /<entry\b/i.test(t) || /<arxiv:/i.test(t) || /<title>/i.test(t) && /<author>/i.test(t);
-  }
-  function looksLikeScrapeXml(txt){
-    const t = txt.slice(0, 7000);
-    return /<item\b/i.test(t) && /<version\b/i.test(t);
-  }
-
-  async function findSupportDocsByContent(zip, guessedId){
-    const names = Object.keys(zip.files).filter(n => !zip.files[n].dir);
-
-    const xmlNames = names.filter(n => n.toLowerCase().endsWith(".xml"));
-    const htmlNames = names.filter(n => n.toLowerCase().endsWith(".html") || n.toLowerCase().endsWith(".htm"));
-
-    // Prefer files that contain arxiv id in filename if available
-    const prefer = (arr) => guessedId ? arr.sort((a,b)=> (b.includes(guessedId)?1:0)-(a.includes(guessedId)?1:0)) : arr;
-
-    let apiName = null, scrapeName = null;
-
-    for (const n of prefer([...xmlNames])) {
-      const txt = await zip.file(n).async("string");
-      if (!apiName && looksLikeApiXml(txt)) apiName = n;
-      if (!scrapeName && looksLikeScrapeXml(txt)) scrapeName = n;
-      if (apiName && scrapeName) break;
-    }
-
-    const htmlName = prefer([...htmlNames])[0] || null;
-
-    return { apiName, scrapeName, htmlName };
-  }
-
-  // ----------------------------
-  // ZIP Load
-  // ----------------------------
-  zipInput.addEventListener("change", async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    resetAll();
-
-    zipBadge.className = "badge warn";
-    zipBadge.textContent = "Loading ZIP…";
-
-    try {
-      const buf = await file.arrayBuffer();
-      const zip = await window.JSZip.loadAsync(buf);
-      state.zip = zip;
-
-      const names = [];
-      zip.forEach((path, entry) => { if (!entry.dir) names.push(path); });
-
-      fileCount.textContent = String(names.length);
-
-      zipBadge.className = "badge good";
-      zipBadge.textContent = `ZIP loaded: ${file.name}`;
-
-      const pdfs = names.filter(n => lower(n).endsWith(".pdf"));
-      if (pdfs.length === 0) {
-        zipBadge.className = "badge bad";
-        zipBadge.textContent = "ZIP loaded but no PDF found";
-      }
-
-      state.sets = pdfs.map(pdfName => {
-        const guess = extractArxivFromText(pdfName);
-        return { key: guess.id ? guess.id : pdfName, pdfName };
-      });
-
-      renderSetList();
-      if (state.sets.length) selectSet(0);
-      runBtn.disabled = (state.sets.length === 0);
-
-    } catch (err) {
-      zipBadge.className = "badge bad";
-      zipBadge.textContent = "Failed to read ZIP";
-      console.error(err);
-      alert("ZIP failed to load. Open DevTools Console and copy the first red error.");
-    }
-  });
-
-  // ----------------------------
-  // Render sets
-  // ----------------------------
-  function renderSetList(){
-    fileList.innerHTML = "";
-    state.sets.forEach((s, idx) => {
-      const div = document.createElement("div");
-      div.className = "item" + (idx === state.selectedSetIndex ? " active" : "");
-      div.innerHTML = `
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-          <div style="font-weight:900;font-size:13px">${escapeHtml(s.pdfName.split("/").pop())}</div>
-          <span class="badge">${escapeHtml(extractArxivFromText(s.pdfName).id || "PDF")}</span>
-        </div>
-        <div class="muted" style="margin-top:6px">Support docs are matched by content (API vs Scrape).</div>
-      `;
-      div.addEventListener("click", () => selectSet(idx));
-      fileList.appendChild(div);
-    });
-  }
-
-  async function selectSet(idx){
-    state.selectedSetIndex = idx;
-    renderSetList();
-
-    const set = state.sets[idx];
-    selectedSet.textContent = `Selected: ${set.pdfName.split("/").pop()}`;
-
-    const guessed = extractArxivFromText(set.pdfName).id;
-
-    const { apiName, scrapeName, htmlName } = await findSupportDocsByContent(state.zip, guessed);
-    state.selected = { pdfName: set.pdfName, apiName, scrapeName, htmlName };
-
-    await loadPdfFromZip(set.pdfName);
-    await loadTextPreview(apiName, apiText);
-    await loadTextPreview(scrapeName, scrapeText);
-    await loadHtmlPreview(htmlName);
-  }
-
-  async function loadTextPreview(name, targetTextarea){
-    if (!name) { targetTextarea.value = ""; return; }
-    const file = state.zip.file(name);
-    if (!file) { targetTextarea.value = ""; return; }
-    targetTextarea.value = await file.async("string");
-  }
-
-  async function loadHtmlPreview(name){
-    if (!name) { htmlPreview.innerHTML = "No HTML loaded."; return; }
-    const file = state.zip.file(name);
-    if (!file) { htmlPreview.innerHTML = "No HTML loaded."; return; }
-    const txt = await file.async("string");
-    htmlPreview.innerHTML = stripScripts(txt) || "No HTML content.";
-  }
-
-  // ----------------------------
-  // PDF preview
-  // ----------------------------
-  function clearPdf(){
-    state.pdfDoc = null;
-    state.pdfPageNum = 1;
-    state.pdfPageCount = 0;
-    pageInfo.textContent = "- / -";
-    prevPageBtn.disabled = true;
-    nextPageBtn.disabled = true;
-    const ctx = pdfCanvas.getContext("2d");
-    ctx.clearRect(0,0,pdfCanvas.width,pdfCanvas.height);
-  }
-
-  async function loadPdfFromZip(name){
-    clearPdf();
-    if (!name) return;
-
-    const file = state.zip.file(name);
-    if (!file) return;
-
-    const u8 = await file.async("uint8array");
-    const loadingTask = pdfjsLib.getDocument({ data: u8 });
-    const pdf = await loadingTask.promise;
-
-    state.pdfDoc = pdf;
-    state.pdfPageCount = pdf.numPages;
-    state.pdfPageNum = 1;
-
-    await renderPdfPage(state.pdfPageNum);
-  }
-
-  async function renderPdfPage(num){
-    if (!state.pdfDoc) return;
-
-    const page = await state.pdfDoc.getPage(num);
-    const viewport = page.getViewport({ scale: 1.3 });
-
-    const ctx = pdfCanvas.getContext("2d");
-    pdfCanvas.width = viewport.width;
-    pdfCanvas.height = viewport.height;
-
-    await page.render({ canvasContext: ctx, viewport }).promise;
-
-    pageInfo.textContent = `${num} / ${state.pdfPageCount}`;
-    prevPageBtn.disabled = (num <= 1);
-    nextPageBtn.disabled = (num >= state.pdfPageCount);
-  }
-
-  prevPageBtn.addEventListener("click", async () => {
-    if (!state.pdfDoc || state.pdfPageNum <= 1) return;
-    state.pdfPageNum -= 1;
-    await renderPdfPage(state.pdfPageNum);
-  });
-
-  nextPageBtn.addEventListener("click", async () => {
-    if (!state.pdfDoc || state.pdfPageNum >= state.pdfPageCount) return;
-    state.pdfPageNum += 1;
-    await renderPdfPage(state.pdfPageNum);
-  });
-
-  // ----------------------------
-  // Parsing + extraction
-  // ----------------------------
+  // --- XML helpers ---
   function xmlText(node, tagName) {
     const el = node.getElementsByTagName(tagName)[0];
-    return el ? el.textContent.trim() : "";
+    return el ? (el.textContent || "").trim() : "";
   }
 
   function parseApiXml(xmlStr) {
     const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
-    const id = xmlText(doc, "id");           // often like http://arxiv.org/abs/2505.10933v1 or just 2505.10933v1
+    const id = xmlText(doc, "id");
     const title = xmlText(doc, "title");
     const abstract = xmlText(doc, "abstract");
     const authors = [...doc.getElementsByTagName("author")].map(a => ({
@@ -532,7 +315,7 @@
   function parseScrapeXml(xmlStr) {
     const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
     const item = doc.getElementsByTagName("item")[0];
-    const id = item?.getAttribute("id") || ""; // often 2505.10933
+    const id = item?.getAttribute("id") || "";
     const v = doc.getElementsByTagName("version")[0];
     let version = "";
     if (v) {
@@ -548,18 +331,28 @@
     const bodyText = doc.body?.textContent || "";
     const { id, version } = extractArxivFromText(bodyText);
 
-    // Title best-effort
     let title = (doc.querySelector('meta[name="citation_title"]')?.getAttribute("content") || "").trim();
+    if (!title) {
+      const titleLabel = [...doc.querySelectorAll("h1,h2,b,strong,td,div,span,p")]
+        .find(el => /title\s*:/i.test(el.textContent));
+      if (titleLabel) {
+        const m = /title\s*:\s*(.+)$/i.exec(titleLabel.textContent);
+        if (m) title = m[1].trim();
+      }
+    }
     if (!title) title = (doc.title || "").trim();
 
-    // Abstract best-effort
     const fullText = bodyText.replace(/\s+/g," ").trim();
     let abstract = "";
-    const idx = fullText.toLowerCase().indexOf("abstract");
-    if (idx !== -1) {
-      const slice = fullText.slice(idx);
-      const stop = slice.search(/\b(comments|subjects|cite as|submission history|full-text links)\b/i);
-      abstract = (stop > 0 ? slice.slice(0, stop) : slice).replace(/abstract\s*:?/i, "").trim();
+    const absHeads = ["abstract","summary","synopsis","summary and conclusions"];
+    for (const h of absHeads) {
+      const idx = fullText.toLowerCase().indexOf(h);
+      if (idx !== -1) {
+        const slice = fullText.slice(idx);
+        const stop = slice.search(/\b(comments|subjects|cite as|submission history|full-text links)\b/i);
+        abstract = (stop > 0 ? slice.slice(0, stop) : slice).replace(new RegExp(`\\b${h}\\b\\s*:?\\s*`,"i"), "").trim();
+        break;
+      }
     }
 
     return { id, version, title, abstract, sanitizedHtml: stripScripts(htmlStr) };
@@ -572,6 +365,10 @@
     const raw = m[1].trim();
     const stop = raw.split(/\b(abstract|introduction)\b/i)[0].trim();
     return stop.split(/[;•,\u2022|·\u00b7\/]+/).map(s => s.trim()).filter(Boolean);
+  }
+
+  function escapeXml(s){
+    return String(s||"").replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
   }
 
   function buildElsevierXml({ arxivIdWithVersion, chosenTitle, abstractText, keywords, authors }) {
@@ -645,73 +442,294 @@ ${absXml}          <source srcid="???"/>
   }
 
   // ----------------------------
-  // Run Extraction (NOW WORKS)
+  // Robust support-doc detection (BY CONTENT)
+  // ----------------------------
+  async function detectSupportDocsByContent(zip, guessedId) {
+    const names = Object.keys(zip.files).filter(n => !zip.files[n].dir);
+
+    const xmlNames = names.filter(n => lower(n).endsWith(".xml"));
+    const htmlNames = names.filter(n => lower(n).endsWith(".html") || lower(n).endsWith(".htm"));
+
+    let apiName = null;
+    let scrapeName = null;
+
+    for (const n of xmlNames) {
+      const txt = await zip.file(n).async("string");
+      const head = txt.slice(0, 6000).toLowerCase();
+
+      // API/OAI tends to contain <record> and oai:arXiv.org:NNNN.NNNNN and <arXiv>
+      const looksApi =
+        head.includes("<record") ||
+        head.includes("oai:arxiv.org:") ||
+        head.includes("<arxiv");
+
+      // Scrape XML in your earlier rule usually has <item id="..."> and <version number="[v1]">
+      const looksScrape =
+        head.includes("<item") && head.includes("version") && head.includes("[v");
+
+      if (!apiName && looksApi) apiName = n;
+      if (!scrapeName && looksScrape) scrapeName = n;
+    }
+
+    // Prefer ones containing the guessed id in filename if available
+    if (guessedId) {
+      const apiByName = xmlNames.find(n => n.includes(guessedId) && n !== scrapeName);
+      if (apiByName) apiName = apiByName;
+
+      const scrapeByName = xmlNames.find(n => n.includes(guessedId) && n !== apiName);
+      if (scrapeByName && !apiName) scrapeName = scrapeByName;
+    }
+
+    const htmlName = (guessedId
+      ? (htmlNames.find(n => n.includes(guessedId)) || htmlNames[0] || null)
+      : (htmlNames[0] || null)
+    );
+
+    return { apiName, scrapeName, htmlName };
+  }
+
+  // ----------------------------
+  // ZIP Load
+  // ----------------------------
+  zipInput.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    resetAll();
+    zipBadge.className = "badge warn";
+    zipBadge.textContent = "Loading ZIP…";
+
+    try {
+      const buf = await file.arrayBuffer();
+      const zip = await JSZip.loadAsync(buf);
+      state.zip = zip;
+
+      state.fileNames = Object.keys(zip.files).filter(n => !zip.files[n].dir);
+      state.pdfs = state.fileNames.filter(n => lower(n).endsWith(".pdf"));
+
+      fileCount.textContent = String(state.pdfs.length);
+      zipBadge.className = "badge good";
+      zipBadge.textContent = `ZIP loaded: ${file.name}`;
+
+      renderPdfList();
+      if (state.pdfs.length) selectPdf(0);
+
+    } catch (err) {
+      console.error(err);
+      zipBadge.className = "badge bad";
+      zipBadge.textContent = "Failed to read ZIP";
+    }
+  });
+
+  function resetAll(){
+    state.fileNames = [];
+    state.pdfs = [];
+    state.selectedPdf = null;
+    state.selected = { pdfName:null, apiName:null, scrapeName:null, htmlName:null };
+
+    apiText.value = "";
+    scrapeText.value = "";
+    htmlPreview.innerHTML = "No HTML loaded.";
+    outXml.value = "";
+
+    downloadBtn.disabled = true;
+    runBtn.disabled = true;
+
+    arxivIdVal.textContent = "—";
+    versionVal.textContent = "—";
+    matchVal.innerHTML = "—";
+    titleVal.textContent = "—";
+    absVal.innerHTML = "—";
+    kwVal.innerHTML = "—";
+    authVal.innerHTML = "—";
+    selectedSet.textContent = "No set selected";
+
+    clearPdf();
+    fileList.innerHTML = "";
+    fileCount.textContent = "0";
+  }
+
+  // ----------------------------
+  // Render PDF list
+  // ----------------------------
+  function renderPdfList(){
+    fileList.innerHTML = "";
+    state.pdfs.forEach((pdfName, idx) => {
+      const div = document.createElement("div");
+      div.className = "item" + (idx === state.selectedPdf ? " active" : "");
+      const idGuess = extractArxivFromText(pdfName).id || "PDF";
+      div.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div style="font-weight:900;font-size:13px">${escapeHtml(pdfName.split("/").pop())}</div>
+          <span class="badge">${escapeHtml(idGuess)}</span>
+        </div>
+        <div class="muted" style="margin-top:6px">Auto-detects API/Scrape/HTML by file content.</div>
+      `;
+      div.addEventListener("click", () => selectPdf(idx));
+      fileList.appendChild(div);
+    });
+  }
+
+  async function selectPdf(idx){
+    state.selectedPdf = idx;
+    renderPdfList();
+
+    const pdfName = state.pdfs[idx];
+    selectedSet.textContent = `Selected: ${pdfName.split("/").pop()}`;
+
+    const { id: guessedId } = extractArxivFromText(pdfName);
+    const support = await detectSupportDocsByContent(state.zip, guessedId);
+
+    state.selected = {
+      pdfName,
+      apiName: support.apiName,
+      scrapeName: support.scrapeName,
+      htmlName: support.htmlName
+    };
+
+    runBtn.disabled = false;
+
+    await loadPdfFromZip(pdfName);
+    await loadTextPreview(state.selected.apiName, apiText);
+    await loadTextPreview(state.selected.scrapeName, scrapeText);
+    await loadHtmlPreview(state.selected.htmlName);
+  }
+
+  async function loadTextPreview(name, targetTextarea){
+    if (!name) { targetTextarea.value = ""; return; }
+    const file = state.zip.file(name);
+    if (!file) { targetTextarea.value = ""; return; }
+    targetTextarea.value = await file.async("string");
+  }
+
+  async function loadHtmlPreview(name){
+    if (!name) { htmlPreview.innerHTML = "No HTML loaded."; return; }
+    const file = state.zip.file(name);
+    if (!file) { htmlPreview.innerHTML = "No HTML loaded."; return; }
+    const txt = await file.async("string");
+    htmlPreview.innerHTML = stripScripts(txt) || "No HTML content.";
+  }
+
+  // ----------------------------
+  // PDF preview
+  // ----------------------------
+  function clearPdf(){
+    state.pdfDoc = null;
+    state.pdfPageNum = 1;
+    state.pdfPageCount = 0;
+    pageInfo.textContent = "- / -";
+    prevPageBtn.disabled = true;
+    nextPageBtn.disabled = true;
+    const ctx = pdfCanvas.getContext("2d");
+    ctx.clearRect(0,0,pdfCanvas.width,pdfCanvas.height);
+  }
+
+  async function loadPdfFromZip(name){
+    clearPdf();
+    const file = state.zip.file(name);
+    if (!file) return;
+
+    const u8 = await file.async("uint8array");
+    const loadingTask = pdfjsLib.getDocument({ data: u8 });
+    const pdf = await loadingTask.promise;
+
+    state.pdfDoc = pdf;
+    state.pdfPageCount = pdf.numPages;
+    state.pdfPageNum = 1;
+
+    await renderPdfPage(1);
+  }
+
+  async function renderPdfPage(num){
+    if (!state.pdfDoc) return;
+    const page = await state.pdfDoc.getPage(num);
+    const viewport = page.getViewport({ scale: 1.3 });
+    const ctx = pdfCanvas.getContext("2d");
+    pdfCanvas.width = viewport.width;
+    pdfCanvas.height = viewport.height;
+
+    await page.render({ canvasContext: ctx, viewport }).promise;
+
+    pageInfo.textContent = `${num} / ${state.pdfPageCount}`;
+    prevPageBtn.disabled = (num <= 1);
+    nextPageBtn.disabled = (num >= state.pdfPageCount);
+  }
+
+  prevPageBtn.addEventListener("click", async () => {
+    if (!state.pdfDoc || state.pdfPageNum <= 1) return;
+    state.pdfPageNum -= 1;
+    await renderPdfPage(state.pdfPageNum);
+  });
+
+  nextPageBtn.addEventListener("click", async () => {
+    if (!state.pdfDoc || state.pdfPageNum >= state.pdfPageCount) return;
+    state.pdfPageNum += 1;
+    await renderPdfPage(state.pdfPageNum);
+  });
+
+  // ----------------------------
+  // Run Extraction (ACTUALLY RUNS)
   // ----------------------------
   runBtn.addEventListener("click", async () => {
-    if (!state.selected || !state.zip) return;
+    try {
+      if (!state.selected?.pdfName) return;
 
-    const apiRaw = apiText.value || "";
-    const scrapeRaw = scrapeText.value || "";
-    const htmlRaw = state.selected.htmlName ? await state.zip.file(state.selected.htmlName).async("string") : "";
+      const apiRaw = apiText.value || "";
+      const scrapeRaw = scrapeText.value || "";
+      const htmlRaw = state.selected.htmlName ? await state.zip.file(state.selected.htmlName).async("string") : "";
 
-    let api = null, scrape = null, html = null;
-    try { api = apiRaw ? parseApiXml(apiRaw) : null; } catch { api = null; }
-    try { scrape = scrapeRaw ? parseScrapeXml(scrapeRaw) : null; } catch { scrape = null; }
-    try { html = htmlRaw ? parseHtmlLanding(htmlRaw) : null; } catch { html = null; }
+      const api = apiRaw ? parseApiXml(apiRaw) : null;
+      const scrape = scrapeRaw ? parseScrapeXml(scrapeRaw) : null;
+      const html = htmlRaw ? parseHtmlLanding(htmlRaw) : null;
 
-    const apiIdText = api?.id || "";
-    const scrapeId = (scrape?.id || "").trim();
-    const htmlId = (html?.id || "").trim();
+      const apiId = api?.id || "";
+      const scrapeId = scrape?.id || "";
+      const htmlId = html?.id || "";
 
-    // Normalize API id (it may include URL)
-    const apiExtract = extractArxivFromText(apiIdText);
-    const apiId = (apiExtract.id || "").trim();
-    const apiVer = (apiExtract.version || "").trim();
+      const scrapeVer = scrape?.version || "";
+      const htmlVer = html?.version || "";
 
-    const scrapeVer = (scrape?.version || "").trim();
-    const htmlVer = (html?.version || "").trim();
+      const finalId = (apiId || scrapeId || htmlId || extractArxivFromText(state.selected.pdfName).id || "").trim();
+      const finalVer = (htmlVer || scrapeVer || "").trim();
 
-    // final id/version
-    const finalId = (apiId || scrapeId || htmlId || extractArxivFromText(state.selected.pdfName).id || "").trim();
-    const finalVer = (htmlVer || scrapeVer || apiVer || "").trim();
+      const ids = [apiId, scrapeId, htmlId].filter(Boolean);
+      const idAllSame = ids.length ? ids.every(x => x === ids[0]) : false;
 
-    // strict matching:
-    const ids = [apiId, scrapeId, htmlId].filter(Boolean);
-    const idAllSame = ids.length ? ids.every(x => x === ids[0]) : false;
+      let verOk = true;
+      if (htmlVer && scrapeVer && htmlVer !== scrapeVer) verOk = false;
+      if (!htmlVer && !scrapeVer) verOk = false;
 
-    let verOk = true;
-    if (htmlVer && scrapeVer && htmlVer !== scrapeVer) verOk = false;
-    if (!htmlVer && !scrapeVer && !apiVer) verOk = false;
+      const matchOk = (!!finalId) && idAllSame && verOk;
 
-    const matchOk = (!!finalId) && idAllSame && verOk;
+      const chosenTitle = (html?.title || api?.title || "").trim();
+      const absText = (api?.abstract || html?.abstract || "").trim();
+      const kw = detectKeywordsFromText(htmlRaw);
+      const authors = api?.authors || [];
 
-    // title/abstract/authors (basic)
-    const chosenTitle = (html?.title || api?.title || "").trim();
-    const absText = (api?.abstract || html?.abstract || "").trim();
-    const kw = detectKeywordsFromText(htmlRaw);
-    const authors = api?.authors || [];
-    const authorsOk = authors.length > 0;
+      arxivIdVal.textContent = finalId || "—";
+      versionVal.textContent = finalVer || "—";
+      matchVal.innerHTML = matchOk ? badge("OK – IDs & versions match", "good") : badge("HOLD – Version/ID mismatch", "bad");
+      titleVal.textContent = chosenTitle || "—";
+      absVal.innerHTML = absText ? badge("Yes", "good") : badge("No", "warn");
+      kwVal.innerHTML = kw.length ? badge(`${kw.length} keyword(s)`, "good") : badge("None detected", "warn");
+      authVal.innerHTML = authors.length ? badge(`API authors: ${authors.length}`, "good") : badge("No authors parsed", "warn");
 
-    arxivIdVal.textContent = finalId || "—";
-    versionVal.textContent = finalVer || "—";
-    matchVal.innerHTML = matchOk ? badge("OK – IDs & versions match","good") : badge("HOLD – Version/ID mismatch","bad");
-    titleVal.textContent = chosenTitle || "—";
-    absVal.innerHTML = absText ? badge("Yes","good") : badge("No","warn");
-    kwVal.innerHTML = kw.length ? badge(`${kw.length} keyword(s)`,"good") : badge("None detected","warn");
-    authVal.innerHTML = authorsOk ? badge(`API authors: ${authors.length}`,"good") : badge("No authors parsed from API","bad");
+      const arxivIdWithVersion = (finalId && finalVer) ? `${finalId}${finalVer}` : (finalId || "");
+      const xml = buildElsevierXml({
+        arxivIdWithVersion,
+        chosenTitle,
+        abstractText: absText,
+        keywords: kw,
+        authors
+      });
 
-    const arxivIdWithVersion = (finalId && finalVer) ? `${finalId}${finalVer}` : (finalId || "");
+      outXml.value = xml;
+      downloadBtn.disabled = !xml;
 
-    const xml = buildElsevierXml({
-      arxivIdWithVersion,
-      chosenTitle: chosenTitle || "",
-      abstractText: absText || "",
-      keywords: kw,
-      authors
-    });
-
-    outXml.value = xml;
-    downloadBtn.disabled = !xml;
+    } catch (e) {
+      console.error(e);
+      alert("Extraction failed. Open DevTools Console and send me the red error line.");
+    }
   });
 
   downloadBtn.addEventListener("click", () => {
