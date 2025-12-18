@@ -1,140 +1,675 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ACE ANI XML Extractor (Single File)</title>
-  <style>
-    :root { --bg:#0b0f14; --panel:#101826; --panel2:#0f1622; --txt:#e7eef9; --muted:#91a4c7; --ok:#2ecc71; --warn:#f1c40f; --bad:#e74c3c; --btn:#1f6feb; --border:#21324a; }
-    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:var(--bg); color:var(--txt); }
-    header { padding:14px 16px; border-bottom:1px solid var(--border); display:flex; gap:12px; align-items:center; justify-content:space-between; background:linear-gradient(180deg,#0b0f14,#0a0e13); position:sticky; top:0; z-index:10;}
-    header h1 { font-size:14px; margin:0; letter-spacing:0.4px; color:var(--txt); }
-    .wrap { display:grid; grid-template-columns: 360px 1fr 420px; gap:12px; padding:12px; }
-    .card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:12px; box-shadow:0 8px 28px rgba(0,0,0,.25); }
-    .card h2 { margin:0 0 10px; font-size:13px; color:var(--muted); letter-spacing:.3px; }
-    label { display:block; font-size:12px; color:var(--muted); margin:10px 0 6px; }
-    input[type="file"], textarea { width:100%; box-sizing:border-box; background:var(--panel2); border:1px solid var(--border); color:var(--txt); border-radius:12px; padding:10px; }
-    textarea { min-height:120px; resize:vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; line-height:1.4; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; }
-    button { background:var(--btn); color:white; border:none; padding:10px 12px; border-radius:12px; cursor:pointer; font-weight:600; font-size:12px; }
-    button.secondary { background:#2b3648; }
-    button.danger { background:#b42318; }
-    button:disabled { opacity:.55; cursor:not-allowed; }
-    .status { font-size:12px; padding:10px; border-radius:12px; border:1px solid var(--border); background:var(--panel2); line-height:1.4; white-space:pre-wrap; }
-    .tag { display:inline-block; padding:3px 8px; border-radius:999px; font-size:11px; margin-right:6px; border:1px solid var(--border); background:#0d1420; color:var(--muted); }
-    .tag.ok { color:#b7ffd0; border-color:rgba(46,204,113,.35); background:rgba(46,204,113,.08); }
-    .tag.warn { color:#fff3b0; border-color:rgba(241,196,15,.35); background:rgba(241,196,15,.08); }
-    .tag.bad { color:#ffd1cc; border-color:rgba(231,76,60,.35); background:rgba(231,76,60,.08); }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; }
-    iframe { width:100%; height:72vh; border:1px solid var(--border); border-radius:14px; background:white; }
-    .small { font-size:11px; color:var(--muted); margin-top:6px; }
-    .divider { height:1px; background:var(--border); margin:10px 0; }
-    .kv { display:grid; grid-template-columns:120px 1fr; gap:6px; font-size:12px; }
-    .kv div:nth-child(odd){ color:var(--muted); }
-  </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>ACE – ANI XML Extractor (Single File)</title>
 
   <!-- PDF.js (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.min.js"></script>
+  <script>
+    // pdf.js worker
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.6.82/pdf.worker.min.js";
+  </script>
+
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #0f1620;
+      --panel2: #111c28;
+      --text: #e6eef8;
+      --muted: #9fb2c7;
+      --accent: #40c4ff;
+      --good: #3ddc97;
+      --warn: #ffcc66;
+      --bad: #ff5c77;
+      --border: rgba(255,255,255,.08);
+      --shadow: 0 12px 40px rgba(0,0,0,.35);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: radial-gradient(1200px 800px at 20% -10%, rgba(64,196,255,.12), transparent 60%),
+                  radial-gradient(900px 600px at 95% 10%, rgba(61,220,151,.10), transparent 55%),
+                  var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 9;
+      background: rgba(11,15,20,.85);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 18px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: .2px;
+    }
+    header .sub {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+    header .left { display:flex; flex-direction:column; }
+    header .right { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+
+    button {
+      background: linear-gradient(180deg, rgba(64,196,255,.22), rgba(64,196,255,.08));
+      color: var(--text);
+      border: 1px solid rgba(64,196,255,.35);
+      padding: 10px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      box-shadow: var(--shadow);
+      font-weight: 600;
+      font-size: 13px;
+    }
+    button:disabled {
+      opacity: .45;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    button.secondary {
+      background: rgba(255,255,255,.05);
+      border: 1px solid var(--border);
+      box-shadow: none;
+    }
+    .container {
+      display: grid;
+      grid-template-columns: 370px 1fr 420px;
+      gap: 14px;
+      padding: 14px;
+      align-items: start;
+    }
+    .card {
+      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .card .hd {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      display:flex;
+      justify-content: space-between;
+      align-items:center;
+      gap: 10px;
+    }
+    .card .hd h2 {
+      margin: 0;
+      font-size: 13px;
+      letter-spacing: .2px;
+    }
+    .card .bd { padding: 12px 14px; }
+
+    .field {
+      margin-bottom: 10px;
+    }
+    .field label {
+      display:block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    input[type="file"], textarea, input[type="text"] {
+      width: 100%;
+      background: rgba(0,0,0,.22);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 12px;
+      padding: 10px 10px;
+      font-size: 13px;
+      outline: none;
+    }
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      line-height: 1.35;
+    }
+    .pill {
+      display:inline-flex;
+      align-items:center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,.04);
+      color: var(--muted);
+      font-size: 12px;
+      margin-right: 8px;
+      margin-bottom: 6px;
+    }
+    .pill strong { color: var(--text); font-weight: 700; }
+    .ok { border-color: rgba(61,220,151,.35); color: rgba(61,220,151,.95); }
+    .warn { border-color: rgba(255,204,102,.35); color: rgba(255,204,102,.95); }
+    .bad { border-color: rgba(255,92,119,.35); color: rgba(255,92,119,.95); }
+
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .small { font-size: 12px; color: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+
+    .pdfWrap {
+      background: rgba(0,0,0,.18);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 10px;
+      min-height: 560px;
+    }
+    canvas { width: 100%; height: auto; display:block; border-radius: 12px; }
+    .row { display:flex; gap: 10px; flex-wrap:wrap; align-items:center; }
+    .sp { height: 10px; }
+
+    .statusBox {
+      padding: 12px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: rgba(0,0,0,.16);
+    }
+    .statusBox .title {
+      font-weight: 800;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+    .statusBox .msg {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 1180px) {
+      .container { grid-template-columns: 1fr; }
+    }
+  </style>
 </head>
 
 <body>
 <header>
-  <h1>ACE — ANI XML Extractor (Single File)</h1>
-  <div class="row">
-    <button id="btnValidate" class="secondary">1) Validate (ID/Title Rules)</button>
-    <button id="btnExtract">2) Extract + Build XML</button>
-    <button id="btnDownload" disabled>3) Download XML</button>
-    <button id="btnReset" class="danger">Reset</button>
+  <div class="left">
+    <h1>ACE – ANI XML Extractor (Single File)</h1>
+    <div class="sub">Strict gating: PDF + HTML + Scrape must match (Cite-as SECOND line). Generates Elsevier ANI XML.</div>
+  </div>
+  <div class="right">
+    <button id="btnRun" disabled>Run Extraction</button>
+    <button id="btnDownload" class="secondary" disabled>Download XML</button>
+    <button id="btnClear" class="secondary">Clear</button>
   </div>
 </header>
 
-<div class="wrap">
-  <!-- LEFT: Inputs -->
+<div class="container">
+  <!-- LEFT: Uploads + Rules status -->
   <section class="card">
-    <h2>Support Documents</h2>
-
-    <label>PDF (required)</label>
-    <input id="pdfFile" type="file" accept="application/pdf" />
-
-    <label>HTML Summary (required)</label>
-    <input id="htmlFile" type="file" accept=".html,text/html" />
-
-    <label>Scraping Data Source (paste OR upload .txt/.json)</label>
-    <input id="scrapeFile" type="file" accept=".txt,.json,text/plain,application/json" />
-    <label>Or paste scraping text/json here</label>
-    <textarea id="scrapeText" placeholder="Paste scraping text / JSON here..."></textarea>
-
-    <div class="divider"></div>
-
-    <h2>Rules Applied (Strict)</h2>
-    <div class="status">
-- If PDF has arXiv ID:
-  ✅ require PDF ID+ver == HTML (Cite as SECOND line) == Scrape ID+ver
-  ❌ else HOLD: Version mismatched
-
-- If PDF has NO arXiv ID:
-  1) compare titles PDF vs HTML
-     - if mismatch in content -> HOLD
-  2) require HTML ID+ver == Scrape ID+ver
-     - else HOLD
+    <div class="hd">
+      <h2>Support Docs</h2>
+      <span class="small">PDF + HTML + Scrape</span>
     </div>
+    <div class="bd">
+      <div class="field">
+        <label>1) PDF (arXiv PDF)</label>
+        <input id="pdfFile" type="file" accept="application/pdf" />
+      </div>
+      <div class="field">
+        <label>2) HTML (arXiv abstract page saved as .html)</label>
+        <input id="htmlFile" type="file" accept=".html,text/html" />
+      </div>
+      <div class="field">
+        <label>3) Scrape data (JSON or TXT) – must contain ID+version somewhere</label>
+        <input id="scrapeFile" type="file" accept=".json,.txt,application/json,text/plain" />
+      </div>
 
-    <div class="small">
-      HTML rule: **Cite as → SECOND NON-EMPTY LINE AFTER it** (no fallback to first line).
+      <div class="sp"></div>
+
+      <div class="statusBox" id="gateBox">
+        <div class="title">Gate Status</div>
+        <div class="msg" id="gateMsg">Upload the 3 support docs. Extraction is blocked until gate passes.</div>
+      </div>
+
+      <div class="sp"></div>
+
+      <div class="row" id="pills"></div>
+
+      <div class="sp"></div>
+      <div class="small">
+        <div><strong>Gate Rules</strong></div>
+        <div class="mono">
+          IF PDF has arXiv ID → PDF ID+ver == HTML ID+ver == SCRAPE ID+ver<br/>
+          ELSE (no PDF ID) → Titles(PDF vs HTML) must match (per rules) AND HTML ID+ver == SCRAPE ID+ver
+        </div>
+      </div>
     </div>
   </section>
 
-  <!-- CENTER: PDF Preview -->
+  <!-- CENTER: PDF preview -->
   <section class="card">
-    <h2>PDF Preview</h2>
-    <iframe id="pdfPreview" title="PDF Preview"></iframe>
-    <div class="small mono" id="pdfMeta"></div>
+    <div class="hd">
+      <h2>PDF Preview</h2>
+      <span class="small" id="pdfInfo">No PDF loaded</span>
+    </div>
+    <div class="bd">
+      <div class="pdfWrap">
+        <canvas id="pdfCanvas"></canvas>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button class="secondary" id="btnPrev" disabled>Prev</button>
+        <button class="secondary" id="btnNext" disabled>Next</button>
+        <span class="small" id="pageInfo"></span>
+      </div>
+    </div>
   </section>
 
-  <!-- RIGHT: Output -->
+  <!-- RIGHT: Extracted fields + XML -->
   <section class="card">
-    <h2>Validation + Extracted Fields</h2>
-
-    <div id="badges"></div>
-    <div class="divider"></div>
-
-    <div class="kv">
-      <div>PDF arXiv</div><div class="mono" id="outPdfId">—</div>
-      <div>HTML arXiv</div><div class="mono" id="outHtmlId">—</div>
-      <div>Scrape arXiv</div><div class="mono" id="outScrapeId">—</div>
-      <div>Status</div><div class="mono" id="outStatus">—</div>
+    <div class="hd">
+      <h2>Extracted Data → XML</h2>
+      <span class="small">Edit if needed</span>
     </div>
+    <div class="bd">
+      <div class="grid2">
+        <div class="field">
+          <label>ArXiv ID (Final)</label>
+          <input id="finalId" type="text" class="mono" placeholder="e.g., 2409.09977v2" />
+        </div>
+        <div class="field">
+          <label>Language (default ENG)</label>
+          <input id="lang" type="text" value="ENG" class="mono" />
+        </div>
+      </div>
 
-    <div class="divider"></div>
+      <div class="field">
+        <label>Title (Final)</label>
+        <textarea id="finalTitle" placeholder="Title"></textarea>
+      </div>
 
-    <label>Title (final rule applied)</label>
-    <textarea id="outTitle" class="mono" placeholder="Title will appear here..."></textarea>
+      <div class="field">
+        <label>Keywords (one per line)</label>
+        <textarea id="finalKeywords" placeholder="keyword 1&#10;keyword 2"></textarea>
+      </div>
 
-    <label>Keywords</label>
-    <textarea id="outKeywords" class="mono" placeholder="One per line..."></textarea>
+      <div class="field">
+        <label>Abstract (Final)</label>
+        <textarea id="finalAbstract" placeholder="Abstract text"></textarea>
+      </div>
 
-    <label>Abstract</label>
-    <textarea id="outAbstract" class="mono" placeholder="Abstract text..."></textarea>
+      <div class="field">
+        <label>Authors (JSON array) – editable</label>
+        <textarea id="finalAuthors" class="mono" placeholder='[{"initials":"P.","given":"Pedro","surname":"Bessa","email":"x@y.com","affiliations":[{"sourceText":"...","organization":["..."],"city":"...","postal":"...","country":"BRA"}]}]'></textarea>
+      </div>
 
-    <label>Authors + Affiliations (parsed)</label>
-    <textarea id="outAuthors" class="mono" placeholder="Author blocks..."></textarea>
+      <div class="field">
+        <label>References (one per line)</label>
+        <textarea id="finalRefs" placeholder="Reference 1&#10;Reference 2"></textarea>
+      </div>
 
-    <label>References (parsed)</label>
-    <textarea id="outRefs" class="mono" placeholder="Reference list..."></textarea>
-
-    <div class="divider"></div>
-    <label>Generated ANI XML</label>
-    <textarea id="outXml" class="mono" placeholder="XML output will appear here..."></textarea>
+      <div class="field">
+        <label>Generated XML (readonly)</label>
+        <textarea id="xmlOut" class="mono" readonly></textarea>
+      </div>
+    </div>
   </section>
 </div>
 
 <script>
 /* =========================
-   Helpers (safe + strict)
-========================= */
+   Helpers (Normalize/Compare)
+   ========================= */
+function normalizeArxivId(id) {
+  if (!id) return "";
+  return String(id)
+    .replace(/^arxiv:\s*/i, "")
+    .replace(/^arXiv:\s*/i, "")
+    .replace(/\s+/g, "")
+    .trim();
+}
 
-function escXml(s){
-  return (s ?? "")
+function splitArxivParts(id) {
+  const norm = normalizeArxivId(id);
+  const m = norm.match(/(\d{4}\.\d{5})(v\d+)?/);
+  if (!m) return { base: "", ver: "" };
+  return { base: m[1] || "", ver: (m[2] || "") };
+}
+
+function eqStrict(a, b) {
+  return normalizeArxivId(a) === normalizeArxivId(b);
+}
+
+// Title normalization for "match" check
+function normalizeTitleForMatch(s) {
+  if (!s) return "";
+  // Keep punctuation as user warned: hyphen differences matter.
+  // But remove obvious formatting artifacts:
+  return String(s)
+    .replace(/\s+/g, " ")
+    .replace(/\u00A0/g, " ")
+    .trim();
+}
+
+// Detect if "totally different" (simple heuristic)
+function titleTotallyDifferent(pdfTitle, htmlTitle) {
+  const a = normalizeTitleForMatch(pdfTitle).toLowerCase();
+  const b = normalizeTitleForMatch(htmlTitle).toLowerCase();
+  if (!a || !b) return true;
+  // If shared token overlap low, call it different
+  const ta = new Set(a.split(/\s+/).filter(x => x.length > 3));
+  const tb = new Set(b.split(/\s+/).filter(x => x.length > 3));
+  const inter = [...ta].filter(x => tb.has(x)).length;
+  const minSize = Math.max(1, Math.min(ta.size, tb.size));
+  return (inter / minSize) < 0.35;
+}
+
+// Choose more complete title unless totally different OR any punctuation mismatch -> choose HTML (per your "hyphen difference means choose summary")
+function chooseFinalTitle(pdfTitle, htmlTitle) {
+  const p = normalizeTitleForMatch(pdfTitle);
+  const h = normalizeTitleForMatch(htmlTitle);
+  if (!p && h) return h;
+  if (!h && p) return p;
+  if (!p && !h) return "";
+
+  // If any exact-string difference includes punctuation/hyphen differences, you said: "always capture Summary title if there is any difference"
+  // But also you said exception: if PDF+HTML not totally different, pick more complete.
+  // We'll do:
+  // 1) If totally different -> choose HTML
+  if (titleTotallyDifferent(p, h)) return h;
+
+  // 2) If not totally different -> choose longer one (more complete), BUT if there is any punctuation/hyphen mismatch, choose HTML.
+  // Punctuation/hyphen mismatch check:
+  const punctuationSensitiveMismatch = (p !== h);
+  if (punctuationSensitiveMismatch) {
+    // if mismatch exists, choose HTML (your strict rule)
+    return h;
+  }
+
+  return (p.length >= h.length) ? p : h;
+}
+
+/* =========================
+   HTML extraction (Cite as SECOND line)
+   ========================= */
+function extractArxivIdFromHtmlSummaryPage(htmlString) {
+  const doc = new DOMParser().parseFromString(htmlString, "text/html");
+
+  // Find a block containing "Cite as:"
+  let citeEl = null;
+  const blocks = Array.from(doc.querySelectorAll("div, section, aside, blockquote, p"));
+  for (const el of blocks) {
+    const t = (el.textContent || "").trim();
+    if (/Cite as:/i.test(t)) { citeEl = el; break; }
+  }
+
+  let citeText = "";
+  if (citeEl) {
+    const tmp = citeEl.cloneNode(true);
+    tmp.querySelectorAll("br").forEach(br => br.replaceWith("\n")); // CRITICAL FIX
+    citeText = (tmp.textContent || "").replace(/\r/g, "").trim();
+  } else {
+    citeText = (doc.body?.textContent || "").replace(/\r/g, "").trim();
+  }
+
+  // Keep only portion after "Cite as:"
+  const idx = citeText.toLowerCase().indexOf("cite as:");
+  if (idx >= 0) citeText = citeText.slice(idx);
+
+  const lines = citeText.split("\n").map(s => s.trim()).filter(Boolean);
+  console.log("[CITE AS LINES]", lines);
+
+  // ALWAYS prefer 2nd line (your requirement)
+  const preferredLine = lines[1] || lines[0] || "";
+  const lineClean = preferredLine.replace(/\[.*?\]/g, " ").trim();
+
+  let m = lineClean.match(/arXiv:\s*(\d{4}\.\d{5})(v\d+)?/i);
+  if (m) return (m[1] + (m[2] || "")).trim();
+
+  m = lineClean.match(/(\d{4}\.\d{5})(v\d+)?/);
+  if (m) return (m[1] + (m[2] || "")).trim();
+
+  return "";
+}
+
+function extractHtmlTitle(htmlString) {
+  const doc = new DOMParser().parseFromString(htmlString, "text/html");
+  // arXiv abs title often in h1.title or similar
+  const h1 = doc.querySelector("h1.title") || doc.querySelector("h1");
+  if (h1) {
+    // remove leading "Title:" if present
+    const t = (h1.textContent || "").replace(/^Title:\s*/i, "").trim();
+    if (t) return t;
+  }
+  // fallback meta
+  const meta = doc.querySelector('meta[name="citation_title"]');
+  if (meta?.getAttribute("content")) return meta.getAttribute("content").trim();
+  // fallback title tag
+  const tag = doc.querySelector("title");
+  return (tag?.textContent || "").trim();
+}
+
+/* =========================
+   Scrape extraction
+   ========================= */
+function extractArxivIdFromScrape(text) {
+  if (!text) return "";
+  const t = String(text);
+
+  // Prefer explicit arXiv:....vN
+  let m = t.match(/arXiv:\s*(\d{4}\.\d{5})(v\d+)?/i);
+  if (m) return (m[1] + (m[2] || "")).trim();
+
+  // Bare
+  m = t.match(/(\d{4}\.\d{5})(v\d+)?/);
+  if (m) return (m[1] + (m[2] || "")).trim();
+
+  return "";
+}
+
+/* =========================
+   PDF extraction (text, simple heuristics)
+   ========================= */
+async function readPdfTextAllPages(arrayBuffer, maxPages = 6) {
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pages = Math.min(pdf.numPages, maxPages);
+  let out = "";
+  for (let i = 1; i <= pages; i++) {
+    const page = await pdf.getPage(i);
+    const tc = await page.getTextContent();
+    const text = tc.items.map(it => it.str).join(" ");
+    out += "\n\n[PAGE " + i + "]\n" + text;
+  }
+  return out;
+}
+
+function extractPdfArxivId(pdfText) {
+  if (!pdfText) return "";
+  // Usually first page has "arXiv:....vN"
+  let m = pdfText.match(/arXiv:\s*(\d{4}\.\d{5})(v\d+)?/i);
+  if (m) return (m[1] + (m[2] || "")).trim();
+  // fallback bare
+  m = pdfText.match(/(\d{4}\.\d{5})(v\d+)?/);
+  if (m) return (m[1] + (m[2] || "")).trim();
+  return "";
+}
+
+function extractPdfTitle(pdfText) {
+  if (!pdfText) return "";
+  // Very rough: take first non-empty line-ish chunk from page 1 area
+  // We only have flattened text; attempt to find "Abstract" and take text before it as title region.
+  const p1 = pdfText.split("[PAGE 1]")[1] || pdfText;
+  const cut = p1.split(/\bAbstract\b/i)[0];
+  const cleaned = cut.replace(/\s+/g, " ").trim();
+
+  // Try to remove arXiv line and dates
+  const noArxiv = cleaned.replace(/arXiv:\s*\d{4}\.\d{5}v?\d*/ig, "").trim();
+  // Use first ~180 chars as "title guess" after removing author noise
+  // If "Preprint" appears, drop it.
+  const t = noArxiv.replace(/\bPREPRINT\b/ig, "").trim();
+  return t.slice(0, 220).trim();
+}
+
+function extractPdfAbstract(pdfText) {
+  if (!pdfText) return "";
+  const t = pdfText.replace(/\s+/g, " ");
+  // Abstract can be "Abstract", "Summary", "Synopsis", etc.
+  const m = t.match(/\b(Abstract|Summary|Synopsis|Summary and Conclusions)\b[:\s]*(.+?)(\b(Introduction|1\s+Introduction|Keywords|Index Terms|References)\b)/i);
+  if (m) return m[2].trim();
+  return "";
+}
+
+function extractPdfKeywords(pdfText) {
+  if (!pdfText) return [];
+  const t = pdfText.replace(/\r/g,"");
+  // headings: Keywords / Index Terms / Keywords and Phrases / Subject Headings
+  const m = t.match(/\b(Keywords|Index Terms|Keywords and Phrases|Subject Headings)\b[:\s]*(.+?)(\b(Abstract|Introduction|1\s+Introduction)\b)/i);
+  if (!m) return [];
+  let raw = m[2].trim();
+
+  // Remove heading word if repeated
+  raw = raw.replace(/^(Keywords|Index Terms|Keywords and Phrases|Subject Headings)\s*[:\-]?\s*/i, "");
+
+  // Split by common separators (not space)
+  const parts = raw.split(/\s*[;•·,|/–—\-]\s*/).map(x => x.trim()).filter(Boolean);
+  // If no separators found, return single chunk (better than fake)
+  if (parts.length === 1) return [parts[0]];
+  return parts;
+}
+
+function extractReferencesFromPdf(pdfText) {
+  if (!pdfText) return [];
+  const t = pdfText.replace(/\r/g,"");
+  const idx = t.search(/\bReferences\b/i);
+  if (idx < 0) return [];
+  const after = t.slice(idx).replace(/\s+/g," ").trim();
+
+  // crude split by patterns like "1." "[1]" etc
+  let refs = [];
+  const chunks = after.split(/\s(?=\[\d+\]|\d+\.)/).slice(1);
+  refs = chunks.map(c => c.trim()).filter(c => c.length > 20);
+  // fallback: split by newline markers we inserted
+  if (refs.length === 0) {
+    refs = after.split(" [").map(x => x.trim()).filter(x => x.length > 30);
+  }
+  // limit to avoid garbage
+  return refs.slice(0, 200);
+}
+
+/* =========================
+   Authors/Affiliations – best effort heuristic
+   ========================= */
+function extractAuthorsAffilsEmails(pdfText) {
+  // Goal: return array of authors, each with affiliations list (sourceText)
+  // This is heuristic. Your examples often have:
+  // "Name 1,2* , Name 1 , Name 4 ..." then numbered affiliation lines.
+  const out = [];
+
+  if (!pdfText) return out;
+  const p1 = (pdfText.split("[PAGE 1]")[1] || pdfText).replace(/\s+/g, " ").trim();
+
+  // Try to capture a block between title guess and Abstract
+  const beforeAbs = p1.split(/\bAbstract\b/i)[0] || p1;
+
+  // Emails anywhere early/late:
+  const emails = Array.from(new Set((pdfText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig) || []).map(x => x.trim())));
+
+  // Simple author candidate: sequences of "Firstname Lastname"
+  // We'll use a conservative regex and then de-duplicate.
+  const nameCandidates = (beforeAbs.match(/\b([A-Z][a-z]+(?:[-’'][A-Z][a-z]+)?\s+[A-Z][a-z]+(?:[-’'][A-Z][a-z]+)?)\b/g) || []);
+  const uniqNames = [];
+  for (const n of nameCandidates) {
+    if (!uniqNames.includes(n) && n.length >= 5) uniqNames.push(n);
+  }
+
+  // Build 3-8 authors max from early text (avoid huge garbage)
+  const authors = uniqNames.slice(0, 12);
+
+  // Affiliation lines with leading numbers e.g. "1 Dept. of ..."
+  const affilLines = [];
+  const allLines = pdfText.split("\n").map(x => x.trim()).filter(Boolean);
+  for (const ln of allLines) {
+    if (/^\d+\s*(Dept\.|Department|School|University|Institut|Institute|Laboratory|Lab|Center|Centre|Faculty|College)\b/i.test(ln)) {
+      affilLines.push(ln);
+    }
+  }
+
+  // If none found, fallback: try to detect chunk with commas and country names
+  if (affilLines.length === 0) {
+    for (const ln of allLines) {
+      if (/(University|Universit|Institute|Laborator|CNRS|INRIA|School|Dept\.|Department)/i.test(ln) && ln.length < 200) {
+        affilLines.push(ln);
+      }
+    }
+  }
+
+  const affilMap = new Map(); // num -> text
+  for (const a of affilLines) {
+    const m = a.match(/^(\d+)\s*(.+)$/);
+    if (m) affilMap.set(m[1], m[2].trim());
+  }
+
+  // Basic mapping: if author line contains "Name 1,2" we map those numbers
+  // Try to find the author list line:
+  const authorLineGuess = beforeAbs.match(/([A-Z][a-z].+?)\bAbstract\b/i)?.[1] || beforeAbs;
+  const authorAffNums = new Map(); // name -> [nums]
+
+  for (const name of authors) {
+    // look near name for superscripts in flat text: "Name 1,2"
+    const re = new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*([0-9][0-9,\\s]*)", "i");
+    const m = authorLineGuess.match(re);
+    let nums = [];
+    if (m) {
+      nums = m[1].split(/[, ]+/).map(x => x.trim()).filter(x => /^\d+$/.test(x));
+    }
+    authorAffNums.set(name, nums);
+  }
+
+  // Build output authors
+  let seq = 1;
+  for (const name of authors) {
+    const parts = name.split(/\s+/);
+    const given = parts.slice(0, -1).join(" ");
+    const surname = parts[parts.length - 1] || "";
+    const initials = given.split(/\s+/).map(w => (w[0] ? (w[0].toUpperCase() + ".") : "")).join("");
+
+    // assign email if contains surname or given substring
+    let email = "";
+    for (const e of emails) {
+      const el = e.toLowerCase();
+      if (surname && el.includes(surname.toLowerCase())) { email = e; break; }
+      if (given && el.includes(given.toLowerCase().split(" ")[0])) { email = e; }
+    }
+
+    const nums = authorAffNums.get(name) || [];
+    const affiliations = [];
+    for (const n of nums) {
+      const txt = affilMap.get(n);
+      if (txt) affiliations.push({ sourceText: txt });
+    }
+
+    out.push({
+      seq: seq++,
+      initials: initials || "",
+      given: given || "",
+      surname: surname || "",
+      email: email || "",
+      affiliations
+    });
+  }
+
+  return out;
+}
+
+/* =========================
+   XML Builder (ANI structure)
+   ========================= */
+function escXml(s) {
+  return String(s ?? "")
     .replace(/&/g,"&amp;")
     .replace(/</g,"&lt;")
     .replace(/>/g,"&gt;")
@@ -142,501 +677,63 @@ function escXml(s){
     .replace(/'/g,"&apos;");
 }
 
-function nowIso(){
-  return new Date().toISOString();
-}
+function buildAniXml(payload) {
+  const ts = new Date().toISOString();
 
-// Parse arXiv id+version from text
-// Supports: "arXiv:2409.09977v2", "2409.09977v2", and ignores bracket junk
-function parseArxivIdVersion(s){
-  const t = (s||"").replace(/\u00A0/g," ").trim();
-  if (!t) return null;
+  const lang = payload.lang || "ENG";
+  const arxiv = normalizeArxivId(payload.arxivId);
 
-  // normalize common noise
-  const clean = t.replace(/\(([^)]*)\)/g," ").replace(/\[([^\]]*)\]/g," ").trim();
+  const kws = (payload.keywords || []).map(k =>
+    `      <author-keyword>${escXml(k)}</author-keyword>`
+  ).join("\n");
 
-  // Prefer explicit arXiv:
-  let m = clean.match(/arxiv\s*:\s*(\d{4}\.\d{4,5})(v\d+)?/i);
-  if (m) return { id: m[1], version: (m[2]||"").toLowerCase(), full: m[1]+(m[2]||"") };
-
-  // Or plain id
-  m = clean.match(/(\d{4}\.\d{4,5})(v\d+)?/i);
-  if (m) return { id: m[1], version: (m[2]||"").toLowerCase(), full: m[1]+(m[2]||"") };
-
-  return null;
-}
-
-// STRICT compare
-function sameArxiv(a,b){
-  if (!a || !b) return false;
-  const av = (a.version||"").toLowerCase();
-  const bv = (b.version||"").toLowerCase();
-  return a.id === b.id && av === bv;
-}
-
-function normSpace(s){
-  return (s||"").replace(/\s+/g," ").trim();
-}
-
-// Title compare (your rules):
-// - If totally different -> choose HTML
-// - If not totally different -> choose the more complete (longer) title
-// - If any punctuation/structure difference like extra hyphen you said to treat as difference → choose HTML
-// (We implement: if normalized strings differ by any non-trivial punctuation change → HTML wins)
-function chooseTitle(pdfTitle, htmlTitle){
-  const p = normSpace(pdfTitle);
-  const h = normSpace(htmlTitle);
-  if (!p && h) return h;
-  if (!h && p) return p;
-  if (!p && !h) return "";
-
-  // If exact match => keep either
-  if (p === h) return p;
-
-  // If punctuation differs (like extra hyphen) => always use HTML (your instruction)
-  // We detect punctuation differences by stripping letters/numbers/spaces and comparing the remaining punctuation patterns.
-  const pPunct = p.replace(/[A-Za-z0-9\s]/g,"");
-  const hPunct = h.replace(/[A-Za-z0-9\s]/g,"");
-  if (pPunct !== hPunct) return h;
-
-  // Content difference check (token overlap)
-  const pTokens = new Set(p.toLowerCase().split(/\s+/).filter(Boolean));
-  const hTokens = new Set(h.toLowerCase().split(/\s+/).filter(Boolean));
-  const inter = [...pTokens].filter(x=>hTokens.has(x)).length;
-  const minSize = Math.min(pTokens.size, hTokens.size) || 1;
-  const overlap = inter / minSize;
-
-  // "Totally different" heuristic
-  if (overlap < 0.55) return h;
-
-  // Not totally different: choose more complete (longer)
-  return (h.length > p.length) ? h : p;
-}
-
-// Extract keywords from PDF text (basic heading based)
-function extractKeywordsFromPdfText(pdfText){
-  const text = pdfText || "";
-  const headings = [
-    "Keywords", "Index Terms", "Keywords and Phrases", "Subject Headings",
-    "Key words", "KEYWORDS", "INDEX TERMS"
-  ];
-
-  // Find first occurrence of a heading line
-  // We'll split into lines and search for lines that start with heading
-  const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
-
-  let idx = -1;
-  let head = "";
-  for (let i=0;i<lines.length;i++){
-    const l = lines[i];
-    for (const h of headings){
-      const re = new RegExp("^" + h.replace(/[.*+?^${}()|[\]\\]/g,"\\$&") + "\\b\\s*[:\\-–—]?", "i");
-      if (re.test(l)){
-        idx = i; head = h; break;
-      }
-    }
-    if (idx !== -1) break;
-  }
-
-  if (idx === -1) return [];
-
-  // Collect a small window after heading until blank-ish stop (or Abstract/Introduction)
-  const stopRe = /^(abstract|introduction|1\s+introduction)\b/i;
-  let chunk = lines[idx];
-
-  // remove heading itself
-  chunk = chunk.replace(new RegExp("^" + head + "\\b\\s*[:\\-–—]?", "i"), "").trim();
-
-  let j = idx+1;
-  while (j < lines.length && j < idx+10){
-    const l = lines[j];
-    if (stopRe.test(l)) break;
-    // stop if new section number starts strongly
-    if (/^\d+(\.\d+)?\s+\S+/.test(l) && l.length < 60) break;
-    chunk += " " + l;
-    j++;
-  }
-
-  // Split by separators (NOT spaces)
-  const parts = chunk
-    .replace(/\s+/g," ")
-    .split(/\s*(;|•|·|\||,|–|—|-|\u2022)\s*/g)
-    .filter(x => x && !/^(;|•|·|\||,|–|—|-|\u2022)$/.test(x))
-    .map(x => x.trim())
-    .filter(Boolean);
-
-  // De-duplicate, remove the word "Keyword(s)" if embedded
-  const out = [];
-  const seen = new Set();
-  for (let k of parts){
-    k = k.replace(/^keywords?\b[:\-–—]?\s*/i,"").trim();
-    if (!k) continue;
-    const key = k.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(k);
-  }
-  return out;
-}
-
-// Extract abstract from PDF text (basic, keeps content)
-function extractAbstractFromPdfText(pdfText){
-  const text = pdfText || "";
-  const lines = text.split("\n").map(l=>l.trim());
-
-  // Find a line that is exactly "Abstract" or begins with it
-  let idx = lines.findIndex(l => /^(abstract|summary|synopsis|summary and conclusions)\b/i.test(l));
-  if (idx === -1) return "";
-
-  // If the heading line also has text after it, include it
-  let chunk = lines[idx].replace(/^(abstract|summary|synopsis|summary and conclusions)\b\s*[:\-–—]?\s*/i,"").trim();
-
-  // collect until we hit a likely next section
-  for (let i=idx+1; i<lines.length && i<idx+80; i++){
-    const l = lines[i];
-    if (!l) continue;
-    if (/^(keywords|index terms|1\s+introduction|introduction)\b/i.test(l)) break;
-    if (/^\d+(\.\d+)?\s+\S+/.test(l) && l.length < 60) break;
-    chunk += (chunk ? " " : "") + l;
-  }
-
-  // normalize spaces
-  return normSpace(chunk);
-}
-
-// Very rough reference extraction (find "References" then split)
-function extractReferencesFromPdfText(pdfText){
-  const text = pdfText || "";
-  const lower = text.toLowerCase();
-  const pos = lower.lastIndexOf("\nreferences");
-  if (pos === -1) return [];
-
-  const tail = text.slice(pos);
-  // remove heading
-  const tail2 = tail.replace(/^\s*references\s*/i,"").trim();
-
-  // split by patterns: [1], 1., 1 , etc.
-  const rawLines = tail2.split("\n").map(x=>x.trim()).filter(Boolean);
-
-  // merge lines into reference blocks
-  const refs = [];
-  let cur = "";
-  for (const l of rawLines){
-    const startsNew = /^(\[\d+\]|\d+\.)\s+/.test(l) || /^[A-Z][a-zA-Z]+,\s/.test(l);
-    if (startsNew && cur){
-      refs.push(normSpace(cur));
-      cur = l;
-    } else {
-      cur += (cur ? " " : "") + l;
-    }
-  }
-  if (cur) refs.push(normSpace(cur));
-
-  // trim to sane size
-  return refs.slice(0, 400);
-}
-
-// Author + affiliation parsing:
-// We try to find emails and numbered affiliations.
-function parseAuthorsAffilsFromPdfText(pdfText){
-  const text = (pdfText||"").replace(/\u00A0/g," ");
-  const lines = text.split("\n").map(l=>l.trim()).filter(Boolean);
-
-  // emails
-  const emails = [];
-  const emailRe = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
-  for (const l of lines){
-    const ms = l.match(emailRe);
-    if (ms) ms.forEach(e=>emails.push(e));
-  }
-  const uniqEmails = [...new Set(emails.map(e=>e.toLowerCase()))];
-
-  // numbered affiliations: "1 Dept ...", "2 School ...", etc.
-  const affMap = new Map(); // num -> text
-  for (const l of lines){
-    const m = l.match(/^(\d{1,2})\s*(.+)$/);
-    if (m && m[2] && m[2].length > 8){
-      // ignore if it looks like section numbering
-      if (/^(introduction|abstract|references)\b/i.test(m[2])) continue;
-      affMap.set(m[1], m[2].trim());
-    }
-  }
-
-  // guess author line near top: first 40 lines until Abstract
-  const top = [];
-  for (let i=0;i<Math.min(lines.length, 120); i++){
-    if (/^abstract\b/i.test(lines[i])) break;
-    top.push(lines[i]);
-  }
-  const topText = top.join(" ");
-
-  // heuristic: authors often appear before affiliations and emails
-  // take the longest comma-separated name-ish segment
-  // We'll attempt to locate a segment before first affiliation number block or first email.
-  let cut = topText;
-  const emailPos = uniqEmails.length ? topText.toLowerCase().indexOf(uniqEmails[0]) : -1;
-  if (emailPos > 0) cut = topText.slice(0, emailPos);
-
-  // Extract possible names: sequences of capitalized words with optional initials
-  const nameCand = cut.match(/([A-Z][a-zA-Z\-’']+(?:\s+[A-Z]\.)?(?:\s+[A-Z][a-zA-Z\-’']+){0,3})/g) || [];
-  // Filter out common words
-  const bad = new Set(["Abstract","Introduction","Preprint","Finding","Off","Grid","Proceedings","University","Department","School"]);
-  const filtered = nameCand
-    .map(x=>x.trim())
-    .filter(x=>x.length>=3 && !bad.has(x))
-    .slice(0, 30);
-
-  // dedupe
-  const names = [];
-  const seen = new Set();
-  for (const n of filtered){
-    const key = n.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    names.push(n);
-  }
-
-  // If we cannot confidently parse, return empty names but still emails/affs
-  return { names, affMap, emails: uniqEmails };
-}
-
-/* =========================
-   HTML parsing (STRICT!)
-========================= */
-
-// HTML rule (STRICT): find "Cite as" then use the SECOND NON-EMPTY LINE AFTER IT.
-// We intentionally IGNORE the same line as "Cite as" and the first line after it.
-function extractArxivFromHtmlCiteAs(htmlText){
-  const raw = (htmlText || "");
-  if (!raw) return null;
-
-  // Convert HTML to plain text lines (handles tags / tables / layout)
-  let text = raw;
-  try {
-    const doc = new DOMParser().parseFromString(raw, "text/html");
-    text = (doc.body?.innerText || doc.body?.textContent || raw);
-  } catch {
-    text = raw.replace(/<script[\s\S]*?<\/script>/gi, " ")
-              .replace(/<style[\s\S]*?<\/style>/gi, " ")
-              .replace(/<[^>]+>/g, " ");
-  }
-
-  const lines = text.replace(/\r/g, "")
-    .split("\n")
-    .map(l => l.trim())
-    .filter(Boolean);
-
-  const citeIdx = lines.findIndex(l => /(^|\b)cite\s+as\b/i.test(l));
-  if (citeIdx === -1) return null;
-
-  // STRICT: second non-empty line AFTER cite
-  const secondLine = lines[citeIdx + 2] || "";
-  const parsed = parseArxivIdVersion(secondLine);
-  if (parsed && parsed.id) return parsed;
-
-  // Safer fallback: within next lines, pick SECOND arxiv-like line only
-  const after = lines.slice(citeIdx + 1, citeIdx + 20);
-  const arxivLines = after.filter(l => /(\d{4}\.\d{4,5})(v\d+)?/i.test(l) || /arxiv\s*:/i.test(l));
-  if (arxivLines.length >= 2) {
-    const parsed2 = parseArxivIdVersion(arxivLines[1]); // STRICT second match
-    if (parsed2 && parsed2.id) return parsed2;
-  }
-
-  return null; // no fallback to first line
-}
-
-function extractTitleFromHtml(htmlText){
-  const raw = htmlText || "";
-  if (!raw) return "";
-
-  try {
-    const doc = new DOMParser().parseFromString(raw, "text/html");
-    // arXiv HTML often has h1.title or meta tags
-    const h1 = doc.querySelector("h1.title, h1, .title");
-    if (h1 && h1.textContent) return normSpace(h1.textContent.replace(/^title\s*:\s*/i,""));
-    const meta = doc.querySelector('meta[name="citation_title"], meta[property="og:title"]');
-    if (meta?.getAttribute("content")) return normSpace(meta.getAttribute("content"));
-    // fallback: first meaningful title tag
-    if (doc.title) return normSpace(doc.title);
-  } catch {}
-
-  return "";
-}
-
-/* =========================
-   Scrape parsing
-========================= */
-
-function extractArxivFromScrape(scrapeText){
-  const raw = (scrapeText||"").trim();
-  if (!raw) return null;
-
-  // If JSON, try find id fields
-  if (raw.startsWith("{") || raw.startsWith("[")) {
-    try {
-      const obj = JSON.parse(raw);
-      const flat = JSON.stringify(obj);
-      const parsed = parseArxivIdVersion(flat);
-      if (parsed) return parsed;
-    } catch {}
-  }
-
-  // Otherwise parse from text
-  // You said brackets can be ignored, focus on v#
-  // Use parseArxivIdVersion directly
-  return parseArxivIdVersion(raw);
-}
-
-/* =========================
-   PDF parsing via PDF.js
-========================= */
-
-pdfjsLib.GlobalWorkerOptions.workerSrc =
-  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.js";
-
-async function readFileAsText(file){
-  return new Promise((resolve,reject)=>{
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result||""));
-    r.onerror = reject;
-    r.readAsText(file);
-  });
-}
-
-async function readFileAsArrayBuffer(file){
-  return new Promise((resolve,reject)=>{
-    const r = new FileReader();
-    r.onload = () => resolve(r.result);
-    r.onerror = reject;
-    r.readAsArrayBuffer(file);
-  });
-}
-
-async function extractPdfText(pdfArrayBuffer, maxPages = 6, alsoLastPages = 2){
-  const doc = await pdfjsLib.getDocument({data: pdfArrayBuffer}).promise;
-  const total = doc.numPages;
-
-  const pagesToRead = new Set();
-  for (let i=1;i<=Math.min(total, maxPages);i++) pagesToRead.add(i);
-  for (let i=Math.max(1, total - alsoLastPages + 1); i<=total; i++) pagesToRead.add(i);
-
-  const ordered = [...pagesToRead].sort((a,b)=>a-b);
-
-  let out = "";
-  for (const pno of ordered){
-    const page = await doc.getPage(pno);
-    const content = await page.getTextContent();
-    const strs = content.items.map(it => it.str || "");
-    out += "\n" + strs.join(" ") + "\n";
-  }
-  return { text: out, numPages: total };
-}
-
-function extractArxivFromPdfText(pdfText){
-  // Look for arXiv:####.#####v#
-  const m = (pdfText||"").match(/arxiv\s*:\s*(\d{4}\.\d{4,5})(v\d+)?/i);
-  if (m) return { id:m[1], version:(m[2]||"").toLowerCase(), full:m[1]+(m[2]||"") };
-
-  // Sometimes footer has "####.#####v#"
-  const n = (pdfText||"").match(/(\d{4}\.\d{4,5})(v\d+)\b/i);
-  if (n) return { id:n[1], version:(n[2]||"").toLowerCase(), full:n[1]+n[2] };
-
-  return null;
-}
-
-// Simple PDF title heuristic: try first line with many words near top
-function extractTitleFromPdfText(pdfText){
-  const lines = (pdfText||"").split("\n").map(l=>l.trim()).filter(Boolean);
-  // avoid junk
-  const bad = /^(arxiv|preprint|abstract|keywords|index terms|the|a|an)\b/i;
-
-  // pick the first long-ish line that isn't a heading, not too long
-  for (const l of lines.slice(0, 80)){
-    if (l.length < 14) continue;
-    if (l.length > 220) continue;
-    if (bad.test(l)) continue;
-    // must have at least 4 words
-    if (l.split(/\s+/).length < 4) continue;
-    return normSpace(l.replace(/\s*\*+\s*$/,"")); // remove trailing *
-  }
-  return "";
-}
-
-/* =========================
-   ANI XML builder
-========================= */
-
-function buildAniXml(payload){
-  const {
-    arxivFull, title, keywords, abstractText,
-    authors, affiliations, refs
-  } = payload;
-
-  const ts = nowIso();
-
-  // Build author-groups:
-  // authors: [{ initials, given, surname, email, affNums:[] }]
-  // affiliations: map num->text
+  // Authors -> author-groups
   let authorGroupsXml = "";
-  let groupSeq = 1;
+  let grpSeq = 1;
 
-  for (let i=0;i<authors.length;i++){
-    const a = authors[i];
-    const seq = i+1;
+  for (const a of (payload.authors || [])) {
+    // Create one group per author (matches your sample style)
+    const emailXml = a.email ? `        <ce:e-address>${escXml(a.email)}</ce:e-address>\n` : "";
+    const affXml = (a.affiliations && a.affiliations.length)
+      ? a.affiliations.map(aff => {
+          // Minimal safe: put full string in ce:source-text, you can later refine org/city parsing.
+          return (
+`      <affiliation>
+        <ce:source-text>${escXml(aff.sourceText || "")}</ce:source-text>
+      </affiliation>`
+          );
+        }).join("\n")
+      : `      <affiliation>\n        <ce:source-text></ce:source-text>\n      </affiliation>`;
 
-    const affTextParts = [];
-    if (a.affNums && a.affNums.length){
-      for (const n of a.affNums){
-        if (affiliations[n]) affTextParts.push(`${n} ${affiliations[n]}`);
-      }
-    }
-
-    // If no numbered aff, just dump all affiliations as source-text joined
-    let sourceText = affTextParts.length
-      ? affTextParts.join(" ")
-      : Object.entries(affiliations).map(([n,v]) => `${n} ${v}`).join(" ");
-
-    sourceText = normSpace(sourceText);
-
-    authorGroupsXml += `
-<author-group seq="${groupSeq}">
-  <author seq="${seq}">
-    ${a.initials ? `<ce:initials>${escXml(a.initials)}</ce:initials>` : ``}
-    ${a.surname ? `<ce:surname>${escXml(a.surname)}</ce:surname>` : ``}
-    ${a.given ? `<ce:given-name>${escXml(a.given)}</ce:given-name>` : ``}
-    ${a.email ? `<ce:e-address>${escXml(a.email)}</ce:e-address>` : ``}
-  </author>
-  <affiliation>
-    <ce:source-text>${escXml(sourceText)}</ce:source-text>
-  </affiliation>
-</author-group>`.trim() + "\n";
-
-    groupSeq++;
+    authorGroupsXml +=
+`    <author-group seq="${grpSeq}">
+      <author seq="${a.seq || grpSeq}">
+        <ce:initials>${escXml(a.initials || "")}</ce:initials>
+        <ce:surname>${escXml(a.surname || "")}</ce:surname>
+        <ce:given-name>${escXml(a.given || "")}</ce:given-name>
+${emailXml.trimEnd()}
+      </author>
+${affXml}
+    </author-group>\n`;
+    grpSeq++;
   }
 
-  // Keywords
-  let kwXml = "";
-  if (keywords && keywords.length){
-    kwXml = `
-<author-keywords>
-${keywords.map(k=>`  <author-keyword>${escXml(k)}</author-keyword>`).join("\n")}
-</author-keywords>`.trim();
-  }
+  const abs = payload.abstract || "";
 
-  // References
-  const refItems = (refs||[]).filter(Boolean);
-  const bibXml = `
-<bibliography refcount="${refItems.length}">
-${refItems.map((r,i)=>`
-  <reference seq="${i+1}">
-    <ref-info/>
-    <ref-fulltext>${escXml(r)}</ref-fulltext>
-    <ce:source-text>${escXml(r)}</ce:source-text>
-  </reference>`.trim()).join("\n")}
-</bibliography>`.trim();
+  const refs = (payload.references || []).map((r, i) => {
+    const seq = i + 1;
+    return (
+`      <reference seq="${seq}">
+        <ref-info/>
+        <ref-fulltext>${escXml(r)}</ref-fulltext>
+        <ce:source-text>${escXml(r)}</ce:source-text>
+      </reference>`
+    );
+  }).join("\n");
 
-  const xml =
-`<?xml version="1.0" encoding="UTF-8"?>
+  const refCount = (payload.references || []).length;
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <units xmlns="http://www.elsevier.com/xml/ani/ani" xmlns:ce="http://www.elsevier.com/xml/ani/common">
   <unit type="ARTICLE">
     <unit-info>
@@ -651,388 +748,386 @@ ${refItems.map((r,i)=>`
         <item-info>
           <status state="new"/>
           <itemidlist>
-            <itemid idtype="ARXIV">${escXml(arxivFull || "")}</itemid>
+            <itemid idtype="ARXIV">${escXml(arxiv)}</itemid>
           </itemidlist>
         </item-info>
         <head>
           <citation-info>
             <citation-type code="ar"/>
-            <citation-language xml:lang="ENG"/>
-            <abstract-language xml:lang="ENG"/>
-            ${kwXml ? kwXml : ``}
+            <citation-language xml:lang="${escXml(lang)}"/>
+            <abstract-language xml:lang="${escXml(lang)}"/>
+            <author-keywords>
+${kws ? kws : ""}
+            </author-keywords>
           </citation-info>
           <citation-title>
-            <titletext xml:lang="ENG" original="y">${escXml(title || "")}</titletext>
+            <titletext xml:lang="${escXml(lang)}" original="y">${escXml(payload.title || "")}</titletext>
           </citation-title>
-          ${authorGroupsXml}
+${authorGroupsXml.trimEnd()}
           <abstracts>
-            <abstract original="y" xml:lang="ENG">
-              <ce:para>${escXml(abstractText || "")}</ce:para>
+            <abstract original="y" xml:lang="${escXml(lang)}">
+              <ce:para>${escXml(abs)}</ce:para>
             </abstract>
           </abstracts>
           <source srcid="???"/>
         </head>
         <tail>
-          ${bibXml}
+          <bibliography refcount="${refCount}">
+${refs}
+          </bibliography>
         </tail>
       </bibrecord>
     </unit-content>
   </unit>
 </units>`;
-
-  return xml;
 }
 
 /* =========================
-   App state + UI
-========================= */
-
+   UI State
+   ========================= */
 const els = {
   pdfFile: document.getElementById("pdfFile"),
   htmlFile: document.getElementById("htmlFile"),
   scrapeFile: document.getElementById("scrapeFile"),
-  scrapeText: document.getElementById("scrapeText"),
-  pdfPreview: document.getElementById("pdfPreview"),
-  pdfMeta: document.getElementById("pdfMeta"),
-
-  btnValidate: document.getElementById("btnValidate"),
-  btnExtract: document.getElementById("btnExtract"),
+  btnRun: document.getElementById("btnRun"),
   btnDownload: document.getElementById("btnDownload"),
-  btnReset: document.getElementById("btnReset"),
-
-  badges: document.getElementById("badges"),
-  outPdfId: document.getElementById("outPdfId"),
-  outHtmlId: document.getElementById("outHtmlId"),
-  outScrapeId: document.getElementById("outScrapeId"),
-  outStatus: document.getElementById("outStatus"),
-  outTitle: document.getElementById("outTitle"),
-  outKeywords: document.getElementById("outKeywords"),
-  outAbstract: document.getElementById("outAbstract"),
-  outAuthors: document.getElementById("outAuthors"),
-  outRefs: document.getElementById("outRefs"),
-  outXml: document.getElementById("outXml"),
+  btnClear: document.getElementById("btnClear"),
+  gateMsg: document.getElementById("gateMsg"),
+  gateBox: document.getElementById("gateBox"),
+  pills: document.getElementById("pills"),
+  finalId: document.getElementById("finalId"),
+  finalTitle: document.getElementById("finalTitle"),
+  finalKeywords: document.getElementById("finalKeywords"),
+  finalAbstract: document.getElementById("finalAbstract"),
+  finalAuthors: document.getElementById("finalAuthors"),
+  finalRefs: document.getElementById("finalRefs"),
+  xmlOut: document.getElementById("xmlOut"),
+  lang: document.getElementById("lang"),
+  pdfCanvas: document.getElementById("pdfCanvas"),
+  pdfInfo: document.getElementById("pdfInfo"),
+  pageInfo: document.getElementById("pageInfo"),
+  btnPrev: document.getElementById("btnPrev"),
+  btnNext: document.getElementById("btnNext"),
 };
 
-let STATE = {
-  pdfBuf: null,
+let state = {
+  pdf: null,
+  pdfBuffer: null,
   pdfText: "",
-  pdfPages: 0,
-
   htmlText: "",
-  scrapeRaw: "",
-
-  pdfArxiv: null,
-  htmlArxiv: null,
-  scrapeArxiv: null,
-
+  scrapeText: "",
+  pdfArxiv: "",
+  htmlArxiv: "",
+  scrapeArxiv: "",
   pdfTitle: "",
   htmlTitle: "",
-  finalTitle: "",
-
-  validated: false,
-  holdReason: "",
-
-  xml: ""
+  gateOk: false,
+  gateReason: "",
+  pdfDoc: null,
+  pageNum: 1,
 };
 
-function badge(text, cls){
-  const span = document.createElement("span");
-  span.className = "tag " + cls;
-  span.textContent = text;
-  return span;
+function setPills(items) {
+  els.pills.innerHTML = "";
+  for (const it of items) {
+    const span = document.createElement("span");
+    span.className = `pill ${it.kind || ""}`;
+    span.innerHTML = `<strong>${it.label}</strong> <span class="mono">${escXml(it.value || "")}</span>`;
+    els.pills.appendChild(span);
+  }
 }
 
-function setBadges(items){
-  els.badges.innerHTML = "";
-  items.forEach(it => els.badges.appendChild(badge(it.text, it.cls)));
+function setGate(ok, msg) {
+  state.gateOk = ok;
+  els.btnRun.disabled = !ok;
+  els.gateBox.style.borderColor = ok ? "rgba(61,220,151,.35)" : "rgba(255,92,119,.35)";
+  els.gateMsg.textContent = msg;
 }
 
-function setStatusLine(msg){
-  els.outStatus.textContent = msg || "—";
+function readFileAsText(file) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsText(file);
+  });
 }
 
-function resetAll(){
-  STATE = {
-    pdfBuf:null, pdfText:"", pdfPages:0,
-    htmlText:"", scrapeRaw:"",
-    pdfArxiv:null, htmlArxiv:null, scrapeArxiv:null,
-    pdfTitle:"", htmlTitle:"", finalTitle:"",
-    validated:false, holdReason:"",
-    xml:""
-  };
-
-  els.pdfFile.value = "";
-  els.htmlFile.value = "";
-  els.scrapeFile.value = "";
-  els.scrapeText.value = "";
-
-  els.pdfPreview.src = "about:blank";
-  els.pdfMeta.textContent = "";
-
-  els.outPdfId.textContent = "—";
-  els.outHtmlId.textContent = "—";
-  els.outScrapeId.textContent = "—";
-  setStatusLine("—");
-
-  els.outTitle.value = "";
-  els.outKeywords.value = "";
-  els.outAbstract.value = "";
-  els.outAuthors.value = "";
-  els.outRefs.value = "";
-  els.outXml.value = "";
-
-  els.btnDownload.disabled = true;
-  setBadges([]);
-}
-
-els.btnReset.addEventListener("click", resetAll);
-
-els.pdfFile.addEventListener("change", async () => {
-  const f = els.pdfFile.files?.[0];
-  if (!f) return;
-
-  const ab = await readFileAsArrayBuffer(f);
-  STATE.pdfBuf = ab;
-
-  // preview
-  const url = URL.createObjectURL(f);
-  els.pdfPreview.src = url;
-
-  // extract text (first 6 + last 2 pages)
-  const {text, numPages} = await extractPdfText(ab, 6, 2);
-  STATE.pdfText = text;
-  STATE.pdfPages = numPages;
-
-  // parse arxiv + title
-  STATE.pdfArxiv = extractArxivFromPdfText(text);
-  STATE.pdfTitle = extractTitleFromPdfText(text);
-
-  els.pdfMeta.textContent = `Pages: ${numPages} | PDF title guess: ${STATE.pdfTitle || "—"}`;
-
-  updateOutputsQuick();
-});
-
-els.htmlFile.addEventListener("change", async () => {
-  const f = els.htmlFile.files?.[0];
-  if (!f) return;
-  const t = await readFileAsText(f);
-  STATE.htmlText = t;
-
-  STATE.htmlArxiv = extractArxivFromHtmlCiteAs(t); // STRICT cite-as second line
-  STATE.htmlTitle = extractTitleFromHtml(t);
-
-  updateOutputsQuick();
-});
-
-els.scrapeFile.addEventListener("change", async () => {
-  const f = els.scrapeFile.files?.[0];
-  if (!f) return;
-  const t = await readFileAsText(f);
-  STATE.scrapeRaw = t;
-  STATE.scrapeArxiv = extractArxivFromScrape(t);
-
-  updateOutputsQuick();
-});
-
-els.scrapeText.addEventListener("input", () => {
-  STATE.scrapeRaw = els.scrapeText.value || "";
-  STATE.scrapeArxiv = extractArxivFromScrape(STATE.scrapeRaw);
-  updateOutputsQuick();
-});
-
-function updateOutputsQuick(){
-  els.outPdfId.textContent = STATE.pdfArxiv?.full || "—";
-  els.outHtmlId.textContent = STATE.htmlArxiv?.full || "—";
-  els.outScrapeId.textContent = STATE.scrapeArxiv?.full || "—";
-
-  // badges
-  const items = [];
-  if (STATE.pdfBuf) items.push({text:"PDF loaded", cls:"ok"});
-  else items.push({text:"PDF missing", cls:"bad"});
-
-  if (STATE.htmlText) items.push({text:"HTML loaded", cls:"ok"});
-  else items.push({text:"HTML missing", cls:"bad"});
-
-  if (STATE.scrapeRaw) items.push({text:"Scrape loaded", cls:"ok"});
-  else items.push({text:"Scrape optional (but needed for gate)", cls:"warn"});
-
-  if (STATE.htmlArxiv) items.push({text:"HTML arXiv from Cite as (2nd line)", cls:"ok"});
-  else if (STATE.htmlText) items.push({text:"HTML arXiv not found via Cite as 2nd line", cls:"bad"});
-
-  setBadges(items);
-}
-
-function hold(reason){
-  STATE.validated = false;
-  STATE.holdReason = reason || "HOLD";
-  setStatusLine("HOLD — " + STATE.holdReason);
-  setBadges([{text:"HOLD", cls:"bad"}]);
-}
-
-function ok(msg){
-  STATE.validated = true;
-  STATE.holdReason = "";
-  setStatusLine(msg || "OK");
-  setBadges([{text:"OK", cls:"ok"}]);
+function readFileAsArrayBuffer(file) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result);
+    fr.onerror = rej;
+    fr.readAsArrayBuffer(file);
+  });
 }
 
 /* =========================
-   Validation (your rules)
-========================= */
-els.btnValidate.addEventListener("click", async () => {
-  // Must have PDF + HTML
-  if (!STATE.pdfBuf) return hold("PDF missing");
-  if (!STATE.htmlText) return hold("HTML missing");
+   PDF render
+   ========================= */
+async function renderPdfPage() {
+  if (!state.pdfDoc) return;
+  const page = await state.pdfDoc.getPage(state.pageNum);
+  const viewport = page.getViewport({ scale: 1.4 });
+  const canvas = els.pdfCanvas;
+  const ctx = canvas.getContext("2d");
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: ctx, viewport }).promise;
 
-  // Must have scraping source for the gate (you require html+scrape match)
-  if (!STATE.scrapeRaw) return hold("Scraping source missing (paste or upload)");
+  els.pageInfo.textContent = `Page ${state.pageNum} / ${state.pdfDoc.numPages}`;
+  els.btnPrev.disabled = state.pageNum <= 1;
+  els.btnNext.disabled = state.pageNum >= state.pdfDoc.numPages;
+}
 
-  // Parse arxiv already computed
-  const pdfA = STATE.pdfArxiv;
-  const htmlA = STATE.htmlArxiv;  // STRICT
-  const scrA = STATE.scrapeArxiv;
+els.btnPrev.addEventListener("click", async () => {
+  if (!state.pdfDoc) return;
+  state.pageNum = Math.max(1, state.pageNum - 1);
+  await renderPdfPage();
+});
+els.btnNext.addEventListener("click", async () => {
+  if (!state.pdfDoc) return;
+  state.pageNum = Math.min(state.pdfDoc.numPages, state.pageNum + 1);
+  await renderPdfPage();
+});
 
-  // Title
-  const pdfTitle = STATE.pdfTitle || "";
-  const htmlTitle = STATE.htmlTitle || "";
-  const finalTitle = chooseTitle(pdfTitle, htmlTitle);
-  STATE.finalTitle = finalTitle;
-  els.outTitle.value = finalTitle;
+/* =========================
+   Gate Evaluation
+   ========================= */
+function evaluateGate() {
+  const pills = [];
 
-  // Gate logic
-  if (pdfA && pdfA.id){
-    // Need all three IDs and versions identical
-    if (!htmlA) return hold("HTML arXiv not found (must use Cite as SECOND line)");
-    if (!scrA) return hold("Scrape arXiv not found");
+  pills.push({ label: "PDF ID", value: state.pdfArxiv || "(none)", kind: state.pdfArxiv ? "ok" : "warn" });
+  pills.push({ label: "HTML ID", value: state.htmlArxiv || "(none)", kind: state.htmlArxiv ? "ok" : "bad" });
+  pills.push({ label: "SCRAPE ID", value: state.scrapeArxiv || "(none)", kind: state.scrapeArxiv ? "ok" : "bad" });
 
-    if (!sameArxiv(pdfA, htmlA) || !sameArxiv(pdfA, scrA)){
-      return hold(`Version mismatched (PDF=${pdfA.full} | HTML=${htmlA?.full||"—"} | Scrape=${scrA?.full||"—"})`);
-    }
-    ok("OK — IDs match across PDF/HTML/Scrape. Ready to process.");
+  pills.push({ label: "PDF Title", value: (state.pdfTitle || "").slice(0,60), kind: state.pdfTitle ? "" : "warn" });
+  pills.push({ label: "HTML Title", value: (state.htmlTitle || "").slice(0,60), kind: state.htmlTitle ? "" : "warn" });
+
+  setPills(pills);
+
+  // Must have HTML + SCRAPE IDs always (because we need at least that)
+  if (!state.htmlArxiv || !state.scrapeArxiv) {
+    setGate(false, "Blocked: HTML and Scrape must provide an arXiv ID (Cite as SECOND line + scrape text).");
     return;
   }
 
-  // PDF has NO ID:
-  // 1) Titles must match (content-wise). Your strict punctuation rule makes HTML chosen if punctuation differs.
-  // We enforce: if titles are empty or too different -> HOLD.
-  const p = normSpace(pdfTitle);
-  const h = normSpace(htmlTitle);
+  const pdfHasId = !!state.pdfArxiv;
 
-  if (!p || !h) return hold("PDF title or HTML title missing (cannot use no-ID pathway)");
-  // content overlap check
-  const pTokens = new Set(p.toLowerCase().split(/\s+/).filter(Boolean));
-  const hTokens = new Set(h.toLowerCase().split(/\s+/).filter(Boolean));
-  const inter = [...pTokens].filter(x=>hTokens.has(x)).length;
-  const overlap = inter / (Math.min(pTokens.size, hTokens.size) || 1);
-  if (overlap < 0.55) return hold("PDF has no ID and titles are content-mismatched");
+  if (pdfHasId) {
+    // Strict: all three must match (including version)
+    const ok = eqStrict(state.pdfArxiv, state.htmlArxiv) && eqStrict(state.htmlArxiv, state.scrapeArxiv);
+    if (!ok) {
+      setGate(false,
+        "HOLD: Version mismatched (strict). Required: PDF == HTML == SCRAPE (ID+version).\n" +
+        `PDF: ${normalizeArxivId(state.pdfArxiv)}\nHTML: ${normalizeArxivId(state.htmlArxiv)}\nSCRAPE: ${normalizeArxivId(state.scrapeArxiv)}`
+      );
+      return;
+    }
+    setGate(true, "OK: PDF/HTML/SCRAPE ID+version match. You can run extraction.");
+    return;
+  }
 
-  // 2) HTML and Scrape arxiv must match
-  if (!htmlA) return hold("HTML arXiv not found (must use Cite as SECOND line)");
-  if (!scrA) return hold("Scrape arXiv not found");
-  if (!sameArxiv(htmlA, scrA)) return hold(`Version mismatched (HTML=${htmlA.full} | Scrape=${scrA.full})`);
+  // ELSE: PDF has no arXiv ID -> Title must match first, then HTML+scrape must match.
+  const finalTitle = chooseFinalTitle(state.pdfTitle, state.htmlTitle);
+  const titlesMatch = !titleTotallyDifferent(state.pdfTitle, state.htmlTitle) && normalizeTitleForMatch(finalTitle) !== "";
 
-  ok("OK — PDF has no ID, titles match, and HTML/Scrape IDs match. Ready to process.");
+  if (!titlesMatch) {
+    setGate(false,
+      "HOLD: PDF has NO ID, so Title gate failed.\n" +
+      "Required: PDF Title and HTML Title must match (per your rules) before checking HTML vs Scrape IDs."
+    );
+    return;
+  }
+
+  const ok2 = eqStrict(state.htmlArxiv, state.scrapeArxiv);
+  if (!ok2) {
+    setGate(false,
+      "HOLD: PDF has NO ID, Titles match, but HTML vs SCRAPE ID+version mismatch.\n" +
+      `HTML: ${normalizeArxivId(state.htmlArxiv)}\nSCRAPE: ${normalizeArxivId(state.scrapeArxiv)}`
+    );
+    return;
+  }
+
+  setGate(true, "OK: PDF has no ID, Titles match, and HTML == SCRAPE ID+version. You can run extraction.");
+}
+
+/* =========================
+   File Listeners
+   ========================= */
+els.pdfFile.addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+
+  state.pdfBuffer = await readFileAsArrayBuffer(f);
+  state.pdfDoc = await pdfjsLib.getDocument({ data: state.pdfBuffer }).promise;
+  state.pageNum = 1;
+  els.pdfInfo.textContent = `${f.name} (${state.pdfDoc.numPages} pages)`;
+  els.btnPrev.disabled = false;
+  els.btnNext.disabled = false;
+  await renderPdfPage();
+
+  // Extract text (first pages)
+  state.pdfText = await readPdfTextAllPages(state.pdfBuffer, 6);
+  state.pdfArxiv = extractPdfArxivId(state.pdfText);
+  state.pdfTitle = extractPdfTitle(state.pdfText);
+
+  evaluateGate();
+});
+
+els.htmlFile.addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  state.htmlText = await readFileAsText(f);
+
+  state.htmlArxiv = extractArxivIdFromHtmlSummaryPage(state.htmlText); // SECOND line fix
+  state.htmlTitle = extractHtmlTitle(state.htmlText);
+
+  evaluateGate();
+});
+
+els.scrapeFile.addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  const t = await readFileAsText(f);
+
+  // if json, stringify safely
+  let text = t;
+  try {
+    const obj = JSON.parse(t);
+    text = JSON.stringify(obj);
+  } catch {}
+  state.scrapeText = text;
+
+  state.scrapeArxiv = extractArxivIdFromScrape(state.scrapeText);
+
+  evaluateGate();
 });
 
 /* =========================
-   Extraction + XML build
-========================= */
-els.btnExtract.addEventListener("click", async () => {
-  if (!STATE.pdfBuf) return hold("PDF missing");
-  if (!STATE.htmlText) return hold("HTML missing");
-  if (!STATE.scrapeRaw) return hold("Scraping source missing");
-  if (!STATE.validated) return hold("Run Validate first (strict gate) and ensure OK");
+   Run extraction
+   ========================= */
+els.btnRun.addEventListener("click", () => {
+  if (!state.gateOk) return;
 
-  // Keywords + Abstract from PDF
-  const kws = extractKeywordsFromPdfText(STATE.pdfText);
-  els.outKeywords.value = kws.join("\n");
+  // Final ID: prefer PDF id if exists; else HTML (since HTML==scrape in that case)
+  const finalId = normalizeArxivId(state.pdfArxiv || state.htmlArxiv || state.scrapeArxiv);
 
-  const abs = extractAbstractFromPdfText(STATE.pdfText);
-  els.outAbstract.value = abs;
+  // Titles
+  const finalTitle = chooseFinalTitle(state.pdfTitle, state.htmlTitle);
 
-  // Authors + affiliations
-  const aa = parseAuthorsAffilsFromPdfText(STATE.pdfText);
+  // Keywords + abstract from PDF (best effort). If none, keep empty rather than fake.
+  const keywords = extractPdfKeywords(state.pdfText);
+  const abs = extractPdfAbstract(state.pdfText);
 
-  // Build author objects:
-  // If we have no names, fallback to empty list (still valid XML but minimal)
-  const authors = [];
-  const emails = aa.emails || [];
-  const affNums = [...aa.affMap.keys()].sort((a,b)=>Number(a)-Number(b));
+  // Authors + affiliations (best effort)
+  const authors = extractAuthorsAffilsEmails(state.pdfText);
 
-  // Simple mapping: assign emails by order to names (best-effort)
-  for (let i=0;i<aa.names.length;i++){
-    const full = aa.names[i];
-    const parts = full.split(/\s+/);
-    const given = parts.slice(0, -1).join(" ");
-    const surname = parts.slice(-1)[0] || "";
-    const initials = (given ? given.split(/\s+/).map(w=>w[0]?.toUpperCase()+".").join("") : "");
-    authors.push({
-      given, surname, initials,
-      email: emails[i] || "",
-      affNums: affNums.length ? affNums : []
-    });
-  }
+  // References (best effort)
+  const refs = extractReferencesFromPdf(state.pdfText);
 
-  // if no names parsed, create a single anonymous author if emails exist
-  if (!authors.length && emails.length){
-    authors.push({
-      given:"", surname:"", initials:"",
-      email: emails[0],
-      affNums: affNums.length ? affNums : []
-    });
-  }
-
-  // Show authors summary
-  let authorDump = "";
-  authorDump += `Names parsed: ${aa.names.length}\n`;
-  authorDump += `Emails parsed: ${emails.length}\n\n`;
-  authorDump += `Affiliations (numbered):\n`;
-  for (const [n,v] of aa.affMap.entries()){
-    authorDump += `${n} ${v}\n`;
-  }
-  authorDump += `\nAuthor records:\n`;
-  for (const a of authors){
-    authorDump += `- ${a.given} ${a.surname} | ${a.email} | aff: ${a.affNums.join(",")}\n`;
-  }
-  els.outAuthors.value = authorDump.trim();
-
-  // References
-  const refs = extractReferencesFromPdfText(STATE.pdfText);
-  els.outRefs.value = refs.join("\n\n");
-
-  // Determine arxivFull to output: prefer the matched arxiv from gate
-  const arxivFull = (STATE.pdfArxiv?.full) || (STATE.htmlArxiv?.full) || (STATE.scrapeArxiv?.full) || "";
+  // Fill UI editable fields
+  els.finalId.value = finalId;
+  els.finalTitle.value = finalTitle || "";
+  els.finalKeywords.value = (keywords || []).join("\n");
+  els.finalAbstract.value = abs || "";
+  els.finalAuthors.value = JSON.stringify(authors, null, 2);
+  els.finalRefs.value = (refs || []).join("\n");
 
   // Build XML
-  const xml = buildAniXml({
-    arxivFull,
-    title: STATE.finalTitle || chooseTitle(STATE.pdfTitle, STATE.htmlTitle),
-    keywords: kws,
-    abstractText: abs,
-    authors,
-    affiliations: Object.fromEntries(aa.affMap.entries()),
-    refs
-  });
-
-  STATE.xml = xml;
-  els.outXml.value = xml;
+  rebuildXml();
   els.btnDownload.disabled = false;
-
-  ok("OK — Extraction complete + XML generated.");
 });
 
+function rebuildXml() {
+  let authors = [];
+  try { authors = JSON.parse(els.finalAuthors.value || "[]"); } catch { authors = []; }
+
+  const keywords = (els.finalKeywords.value || "")
+    .split("\n").map(x => x.trim()).filter(Boolean);
+
+  const refs = (els.finalRefs.value || "")
+    .split("\n").map(x => x.trim()).filter(Boolean);
+
+  const payload = {
+    arxivId: els.finalId.value.trim(),
+    lang: els.lang.value.trim() || "ENG",
+    title: els.finalTitle.value.trim(),
+    keywords,
+    abstract: els.finalAbstract.value.trim(),
+    authors,
+    references: refs,
+  };
+
+  const xml = buildAniXml(payload);
+  els.xmlOut.value = xml;
+}
+
+["finalId","lang","finalTitle","finalKeywords","finalAbstract","finalAuthors","finalRefs"]
+  .forEach(id => document.getElementById(id).addEventListener("input", rebuildXml));
+
+/* =========================
+   Download XML
+   ========================= */
 els.btnDownload.addEventListener("click", () => {
-  if (!STATE.xml) return;
-  const blob = new Blob([STATE.xml], {type:"application/xml;charset=utf-8"});
+  const xml = els.xmlOut.value || "";
+  if (!xml.trim()) return;
+
+  const blob = new Blob([xml], { type: "application/xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "output.xml";
+  const id = normalizeArxivId(els.finalId.value || "output");
+  a.href = url;
+  a.download = `${id || "output"}.xml`;
+  document.body.appendChild(a);
   a.click();
-  setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+  a.remove();
+  URL.revokeObjectURL(url);
 });
 
-/* init */
-resetAll();
+/* =========================
+   Clear
+   ========================= */
+els.btnClear.addEventListener("click", () => {
+  state = {
+    pdf: null,
+    pdfBuffer: null,
+    pdfText: "",
+    htmlText: "",
+    scrapeText: "",
+    pdfArxiv: "",
+    htmlArxiv: "",
+    scrapeArxiv: "",
+    pdfTitle: "",
+    htmlTitle: "",
+    gateOk: false,
+    gateReason: "",
+    pdfDoc: null,
+    pageNum: 1,
+  };
+  els.pdfFile.value = "";
+  els.htmlFile.value = "";
+  els.scrapeFile.value = "";
+
+  els.pdfInfo.textContent = "No PDF loaded";
+  els.pageInfo.textContent = "";
+  els.btnPrev.disabled = true;
+  els.btnNext.disabled = true;
+
+  els.finalId.value = "";
+  els.finalTitle.value = "";
+  els.finalKeywords.value = "";
+  els.finalAbstract.value = "";
+  els.finalAuthors.value = "";
+  els.finalRefs.value = "";
+  els.xmlOut.value = "";
+  els.btnDownload.disabled = true;
+
+  setPills([]);
+  setGate(false, "Upload the 3 support docs. Extraction is blocked until gate passes.");
+});
+
+setGate(false, "Upload the 3 support docs. Extraction is blocked until gate passes.");
 </script>
 </body>
 </html>
