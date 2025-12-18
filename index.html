@@ -300,6 +300,10 @@
     return doc.body.innerHTML || "";
   }
 
+  function escapeXml(s){
+    return String(s||"").replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
+  }
+
   // arXiv ID patterns
   const ARXIV_ID_RE = /(\d{4}\.\d{4,5})(v\d+)?/i;
 
@@ -310,10 +314,13 @@
     if (!text) return { id:null, version:null };
     const m1 = /arxiv:\s*(\d{4}\.\d{4,5})(v\d+)?/i.exec(text);
     if (m1) return { id: m1[1], version: (m1[2]||null) };
+
     const m2 = /oai:arxiv\.org:(\d{4}\.\d{4,5})/i.exec(text);
     if (m2) return { id: m2[1], version: null };
+
     const m3 = ARXIV_ID_RE.exec(text);
     if (m3) return { id: m3[1], version: (m3[2]||null) };
+
     return { id:null, version:null };
   }
 
@@ -324,6 +331,8 @@
   }
 
   // --- HTML landing page (arXiv abstract page) ---
+  // MUST prefer "Cite as" second line when present:
+  //   (or arXiv:NNNN.NNNNNvX [cat] for this version)
   function extractArxivFromCiteAs(htmlStr) {
     if (!htmlStr) return { id: null, version: null };
 
@@ -332,16 +341,18 @@
       .replace(/\u00a0/g, " ")
       .replace(/\s+/g, " ");
 
-    // Prefer (or arXiv:NNNN.NNNNNvX ... for this version)
+    // 1) Prefer explicit second line
     let m = s.match(/\(\s*or\s+arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)\b/i);
     if (m) return { id: m[1], version: m[2] };
 
-    m = s.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)\b[^\n\r]{0,140}for\s+this\s+version/i);
+    // 2) Variant formatting
+    m = s.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)\b[^\n\r]{0,180}for\s+this\s+version/i);
     if (m) return { id: m[1], version: m[2] };
 
+    // 3) Window around "Cite as"
     const low = s.toLowerCase();
     const idx = low.indexOf("cite as");
-    const win = idx >= 0 ? s.slice(idx, idx + 700) : s;
+    const win = idx >= 0 ? s.slice(idx, idx + 800) : s;
 
     m = win.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)\b/i);
     if (m) return { id: m[1], version: m[2] };
@@ -361,12 +372,19 @@
     const abstract = xmlText(doc, "abstract");
 
     const authors = [...doc.getElementsByTagName("author")].map(a => ({
+      rawName: "",
       keyname: xmlText(a, "keyname"),
       forenames: xmlText(a, "forenames"),
+      initials: "",
+      given: "",
+      surname: "",
+      markers: [],
+      emails: [],
       orcid: null,
-      email: null,
-      affiliations: [],
-      source: "API"
+      degrees: [],
+      suffix: null,
+      source: "API",
+      affiliations: []
     }));
 
     const orcidMatches = [...xmlStr.matchAll(/<[^:>]*:orcid>([^<]+)<\/[^:>]*:orcid>/gi)].map(m => (m[1]||"").trim());
@@ -374,6 +392,13 @@
       for (let i=0;i<Math.min(authors.length, orcidMatches.length);i++){
         authors[i].orcid = orcidMatches[i];
       }
+    }
+
+    // Normalize author fields
+    for (const a of authors){
+      a.surname = (a.keyname || "").trim();
+      a.given = (a.forenames || "").trim();
+      a.initials = makeInitials(a.given);
     }
 
     return { id: id || "", title, abstract, authors };
@@ -411,23 +436,51 @@
     let { id, version } = extractArxivFromCiteAs(htmlStr);
 
     if (!id) {
-      const bodyText2 = (doc.body?.innerText || doc.documentElement?.innerText || "");
-      ({ id, version } = extractArxivFromText(bodyText2));
+      const t = (doc.body?.innerText || doc.documentElement?.innerText || "");
+      ({ id, version } = extractArxivFromText(t));
     }
 
     let title = (doc.querySelector('meta[name="citation_title"]')?.getAttribute("content") || "").trim();
     if (!title) title = (doc.title || "").trim();
 
     let abstract = (doc.querySelector('meta[name="citation_abstract"]')?.getAttribute("content") || "").trim();
+    if (!abstract) {
+      const fullText = bodyText.replace(/\s+/g," ").trim();
+      const idx = fullText.toLowerCase().indexOf("abstract");
+      if (idx !== -1){
+        const slice = fullText.slice(idx);
+        const stop = slice.search(/\b(comments|subjects|cite as|submission history|full-text links|references|bibliography)\b/i);
+        abstract = (stop > 0 ? slice.slice(0, stop) : slice)
+          .replace(/\babstract\b\s*:?/i,"")
+          .trim();
+      }
+    }
 
     return { id: id||"", version: version||"", title, abstract, sanitizedHtml: stripScripts(htmlStr), bodyText };
+  }
+
+  function makeInitials(given){
+    const parts = String(given||"").split(/\s+/).filter(Boolean);
+    if (!parts.length) return "";
+    // Keep hyphenated initials: "Brice-Olivier" -> "B.-O."
+    const ini = parts.map(p=>{
+      if (p.includes("-")){
+        return p.split("-").filter(Boolean).map(x => (x[0]?x[0].toUpperCase() + ".":"")).join("-");
+      }
+      return p[0] ? p[0].toUpperCase() + "." : "";
+    }).join("");
+    return ini;
   }
 
   // ----------------------------
   // Title rules
   // ----------------------------
   function cleanTitleForCompare(s){
-    return String(s||"").replace(/\bpreprint\b/ig, "").replace(/\*/g,"").replace(/\s+/g," ").trim();
+    return String(s||"")
+      .replace(/\bpreprint\b/ig, "")
+      .replace(/\*/g,"")
+      .replace(/\s+/g," ")
+      .trim();
   }
   function titlesExactlySame(pdfTitle, htmlTitle){
     return cleanTitleForCompare(pdfTitle) === cleanTitleForCompare(htmlTitle);
@@ -453,72 +506,68 @@
   }
 
   // ----------------------------
-  // Keywords (STRICT — only if explicit heading exists)
+  // Keywords (STRICT: only explicit heading lines)
   // ----------------------------
-  const KW_LINE_RE = /^\s*(keywords?|index\s*terms|keywords?\s*and\s*phrases|subject\s*headings)\s*[:\-–—]\s*(.+)\s*$/i;
+  const KW_LABEL_RE = /^\s*(keywords?|key\s*words?|index\s*terms|keywords?\s*and\s*phrases|subject\s*headings)\s*[:\-–—]\s*(.+)$/i;
 
-  function extractKeywordsStrictFromFirstPages(pagesTextArr){
-    // pagesTextArr: array of page strings (first pages). We ONLY accept explicit "Keywords:" lines.
-    const joined = pagesTextArr.join("\n").replace(/\r/g,"\n");
-    const lines = joined.split("\n").map(l=>l.trim()).filter(Boolean);
+  function extractKeywordsStrictFromPdfText(fullPdfText){
+    if (!fullPdfText) return [];
+    // look for a clean line like: "Keywords: a, b, c"
+    const lines = fullPdfText.replace(/\r/g,"\n").split("\n").map(l=>l.trim()).filter(Boolean);
 
-    // Find first explicit keyword heading line (not inside references etc).
-    // We constrain to early area by only looking at first ~200 lines.
-    const slice = lines.slice(0, 200);
+    for (let i=0;i<Math.min(lines.length, 4000);i++){
+      const l = lines[i];
+      const m = KW_LABEL_RE.exec(l);
+      if (!m) continue;
 
-    for (let i=0;i<slice.length;i++){
-      const line = slice[i];
-      const m = KW_LINE_RE.exec(line);
-      if (m){
-        // If keywords wrap to next line(s) (common), append until blank / new section
-        let payload = (m[2]||"").trim();
-
-        let j = i+1;
-        while (j < slice.length){
-          const nxt = slice[j];
-          if (!nxt) break;
-          if (/^\s*(abstract|introduction|references|bibliography)\b/i.test(nxt)) break;
-          if (KW_LINE_RE.test(nxt)) break; // another heading
-          // wrap lines tend to continue without ending punctuation
-          if (payload.length && payload.length < 500 && !/[:]\s*$/.test(nxt)){
-            // stop if this is clearly a new heading
-            if (/^\s*[A-Z][A-Za-z\s]{2,}:\s*/.test(nxt)) break;
-            payload += " " + nxt;
-            j++;
-            continue;
-          }
-          break;
+      // Sometimes keywords spill to next line (rare). If current line looks short and next line is not a section header, append.
+      let payload = (m[2]||"").trim();
+      const next = lines[i+1] || "";
+      if (payload.length < 25 && next && !/^\s*(abstract|introduction|1\.\s*introduction|references|bibliography)\b/i.test(next) && next.length < 220) {
+        // only append if next line looks like continuation (contains commas or semicolons)
+        if (/[;,]/.test(next) || next.split(/\s+/).length <= 18) {
+          payload += " " + next.trim();
         }
-
-        return splitKeywordPayload(payload);
       }
+
+      return splitKeywordPayload(payload);
     }
-    return []; // STRICT: do not infer
+
+    // If no explicit keyword label line, DO NOT extract anything.
+    return [];
   }
 
-  function splitKeywordPayload(s){
-    if (!s) return [];
-    // split by comma/semicolon/bullets
-    let parts = s.split(/[;•,\u2022|·\u00b7\/]+/).map(x=>x.trim()).filter(Boolean);
+  function splitKeywordPayload(payload){
+    if (!payload) return [];
+    let s = payload.replace(/\s+/g," ").trim();
 
-    // cleanup
-    parts = parts.map(k => k.replace(/\s+/g," ").replace(/[.]+$/g,"").trim()).filter(Boolean);
+    // strip trailing period if it's clearly sentence-ending
+    s = s.replace(/\.\s*$/,"").trim();
 
-    // dedupe
+    // split by commas/semicolons/bullets
+    let parts = s.split(/[;•\u2022|·\u00b7]+/).flatMap(x => x.split(",")).map(x=>x.trim()).filter(Boolean);
+
+    // remove obviously wrong fragments
+    parts = parts
+      .map(k => k.replace(/\s*\(\s*\)$/g,"").trim())
+      .map(k => k.replace(/\s*(\d+)(\*|†|‡)?\s*$/g,"").trim())
+      .filter(k => k.length >= 2 && k.length <= 140);
+
+    // de-dupe
     const seen = new Set();
-    const uniq = [];
+    const out = [];
     for (const k of parts){
       const key = k.toLowerCase();
       if (!seen.has(key)){
         seen.add(key);
-        uniq.push(k);
+        out.push(k);
       }
     }
-    return uniq.slice(0, 60);
+    return out.slice(0, 25);
   }
 
   // ----------------------------
-  // Abstract cleaning
+  // Abstract (keep safe)
   // ----------------------------
   function stripTeXMath(s){
     if (!s) return "";
@@ -533,64 +582,69 @@
   }
 
   // ----------------------------
-  // XML escaping & sup/sub
+  // Sup/Sub conversion for XML
   // ----------------------------
-  function escapeXml(s){
-    return String(s||"").replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
-  }
-
-  const SUPER_MAP = {"⁰":"0","¹":"1","²":"2","³":"3","⁴":"4","⁵":"5","⁶":"6","⁷":"7","⁸":"8","⁹":"9","⁻":"−","⁺":"+"};
-  const SUB_MAP = {"₀":"0","₁":"1","₂":"2","₃":"3","₄":"4","₅":"5","₆":"6","₇":"7","₈":"8","₉":"9"};
+  const SUPER_MAP = {
+    "⁰":"0","¹":"1","²":"2","³":"3","⁴":"4","⁵":"5","⁶":"6","⁷":"7","⁸":"8","⁹":"9",
+    "⁻":"−","⁺":"+"
+  };
+  const SUB_MAP = {
+    "₀":"0","₁":"1","₂":"2","₃":"3","₄":"4","₅":"5","₆":"6","₇":"7","₈":"8","₉":"9"
+  };
 
   function applySupSubXml(text){
     if (!text) return "";
     let out = "";
     for (const ch of String(text)){
-      if (SUPER_MAP[ch] !== undefined) out += `<sup>${escapeXml(SUPER_MAP[ch])}</sup>`;
-      else if (SUB_MAP[ch] !== undefined) out += `<inf>${escapeXml(SUB_MAP[ch])}</inf>`;
-      else out += escapeXml(ch);
+      if (SUPER_MAP[ch] !== undefined){
+        out += `<sup>${escapeXml(SUPER_MAP[ch])}</sup>`;
+      } else if (SUB_MAP[ch] !== undefined){
+        out += `<inf>${escapeXml(SUB_MAP[ch])}</inf>`;
+      } else {
+        out += escapeXml(ch);
+      }
     }
     return out;
   }
 
   // ----------------------------
-  // References extraction (strip numbering like (1), [1], 1.)
+  // References (better splitting + remove numbering)
   // ----------------------------
-  function stripLeadingRefMarker(line){
-    return String(line||"")
-      .replace(/^\s*\(\s*\d+\s*\)\s*/,"")
-      .replace(/^\s*\[\s*\d+\s*\]\s*/,"")
-      .replace(/^\s*\d+\.\s+/,"")
-      .trim();
+  function normalizeRefLine(line){
+    let l = String(line||"").trim();
+    // remove leading numbering markers: (1), [1], 1.
+    l = l.replace(/^\(?\s*\d+\s*\)?\s*[\.\]]?\s*/,"");
+    l = l.replace(/^\[\s*\d+\s*\]\s*/,"");
+    // remove obvious page header noise like "33" alone
+    if (/^\d{1,4}$/.test(l)) return "";
+    return l.trim();
   }
 
-  function extractReferencesFromPdfText(pdfText){
+  function extractReferencesFromPdfTextBetter(pdfText){
     if (!pdfText) return [];
     const t = pdfText.replace(/\r/g,"\n");
     const low = t.toLowerCase();
-
     let start = Math.max(low.lastIndexOf("\nreferences"), low.lastIndexOf("\nbibliography"));
-    if (start < 0) start = Math.max(low.lastIndexOf("references"), low.lastIndexOf("bibliography"));
+    if (start < 0) start = Math.max(low.lastIndexOf("references\n"), low.lastIndexOf("bibliography\n"));
     if (start < 0) return [];
 
     let tail = t.slice(start);
     tail = tail.replace(/^\s*(references|bibliography)\s*/i,"").trim();
 
-    // create pseudo-breaks
-    tail = tail
-      .replace(/\s*(\[\s*\d+\s*\])\s*/g, "\n$1 ")
-      .replace(/\s*(\(\s*\d+\s*\))\s*/g, "\n$1 ")
-      .replace(/\s+(\d+)\.\s+/g, "\n$1. ");
-
-    const lines = tail.split("\n").map(x=>x.trim()).filter(Boolean);
+    const lines = tail.split("\n").map(l=>l.trim()).filter(Boolean);
 
     const refs = [];
     let cur = "";
 
-    const startsNew = (line) =>
-      /^\[\s*\d+\s*\]/.test(line) ||
-      /^\(\s*\d+\s*\)/.test(line) ||
-      /^(\d+)\.\s+/.test(line);
+    // start of a new reference:
+    // [AB24] style, [1] style, (1) style, 1. style
+    const isNew = (l) =>
+      /^\[[A-Za-z0-9]{1,10}[\sA-Za-z0-9+]*\]/.test(l) ||
+      /^\[\s*\d+\s*\]/.test(l) ||
+      /^\(\s*\d+\s*\)/.test(l) ||
+      /^\d+\.\s+/.test(l);
+
+    const isArxivOnly = (l) => /^arxiv:\s*\d{4}\.\d{4,5}/i.test(l);
 
     function pushCur(){
       const r = cur.replace(/\s+/g," ").trim();
@@ -598,306 +652,136 @@
       cur = "";
     }
 
-    for (const line0 of lines){
-      const line = line0.trim();
-      if (startsNew(line)){
-        pushCur();
-        cur = stripLeadingRefMarker(line);
-      } else {
-        cur += (cur ? " " : "") + line;
+    for (const raw of lines){
+      let l = normalizeRefLine(raw);
+      if (!l) continue;
+
+      // join arXiv lines to previous ref
+      if (isArxivOnly(l) && cur){
+        cur += (cur ? " " : "") + l;
+        continue;
       }
+
+      if (isNew(raw)){
+        pushCur();
+        // keep label like [AB24] (do NOT remove), but still normalize spacing
+        cur = raw.replace(/\s+/g," ").trim();
+      } else {
+        cur += (cur ? " " : "") + l;
+      }
+
       if (refs.length >= 500) break;
     }
     pushCur();
 
+    // de-dup
     const seen = new Set();
     const uniq = [];
     for (const r of refs){
       const k = r.toLowerCase();
       if (!seen.has(k)){ seen.add(k); uniq.push(r); }
     }
-    return uniq;
+
+    // drop micro-garbage refs like ":4033–4078," if it slipped through
+    return uniq.filter(r => r.replace(/[^a-z0-9]/ig,"").length >= 12);
   }
 
   // ----------------------------
-  // Emails + affiliations (scan first/last pages; keep safe)
+  // Affiliations (scan end pages + find "Affiliations" block)
   // ----------------------------
-  function extractEmails(text){
-    if (!text) return [];
-    const m = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig) || [];
-    const seen = new Set();
+  function looksLikeAffLine(l){
+    const s = (l||"").trim();
+    if (s.length < 10) return false;
+    // typical: "Name, University..., Orcid ID ..."
+    return /,/.test(s) && /(university|institute|department|dept\.|school|faculty|laboratory|centre|center|hospital|college|cnrs|inria|inaf|infn|observator|orcid)/i.test(s);
+  }
+
+  function parseAffiliationsSectionFromText(pageText){
+    if (!pageText) return [];
+    const lines = pageText.replace(/\r/g,"\n").split("\n").map(l=>l.trim()).filter(Boolean);
+    const idx = lines.findIndex(l => /^\s*\d*\.\s*affiliations\b/i.test(l) || /^\s*affiliations\b/i.test(l));
+    if (idx < 0) return [];
+
     const out = [];
-    for (const e of m){
-      const key = e.toLowerCase();
-      if (!seen.has(key)){ seen.add(key); out.push(e.replace(/[.<>\s]+$/g,"")); }
-    }
-    return out.slice(0, 40);
-  }
+    for (let i=idx+1;i<lines.length;i++){
+      const l = lines[i];
+      if (/^\s*(references|bibliography)\b/i.test(l)) break;
+      // stop at next numbered section
+      if (/^\s*\d+\.\s+[A-Za-z]/.test(l) && i > idx+1) break;
 
-  function extractAffiliationLinesFromText(text){
-    if (!text) return { affByNum: new Map(), freeAff: [] };
-
-    const lines = text.replace(/\r/g,"\n")
-      .split("\n")
-      .map(l=>l.trim())
-      .filter(Boolean);
-
-    const stopIdx = lines.findIndex(l => /^\s*(abstract|keywords|key\s*words|index\s*terms)\b/i.test(l));
-    const headLines = stopIdx >= 0 ? lines.slice(0, stopIdx) : lines;
-
-    const affByNum = new Map();
-    const freeAff = [];
-
-    const looksAff = (l) =>
-      /^\d+\s+/.test(l) ||
-      /university|universit|institute|institut|department|dept\.|laboratory|centre|center|school|faculty|cnrs|inria|infn|inaf|observator|hospital|clinic|research/i.test(l);
-
-    const reject = (l) =>
-      /arxiv:\d{4}\.\d{4,5}/i.test(l) ||
-      /^\s*abstract\b/i.test(l) ||
-      /^\s*keywords?\b/i.test(l) ||
-      /^\s*index\s*terms\b/i.test(l);
-
-    for (const l0 of headLines){
-      if (reject(l0)) continue;
-      if (!looksAff(l0)) continue;
-
-      const l = l0.replace(/\s+/g," ").replace(/\s*\*\s*$/g,"").trim();
-      if (l.length < 15) continue;
-
-      const m = /^(\d+)\s+(.*)$/.exec(l);
-      if (m){
-        const n = m[1];
-        const rest = m[2].trim();
-        if (rest && !affByNum.has(n)) affByNum.set(n, rest);
-      } else {
-        freeAff.push(l);
+      if (looksLikeAffLine(l)) out.push(l);
+      // allow wrapped affiliation lines: if next line continues and current ends with comma
+      else if (out.length && /,$/.test(out[out.length-1]) && l.length < 140) {
+        out[out.length-1] = (out[out.length-1] + " " + l).replace(/\s+/g," ").trim();
       }
     }
-
-    const seen = new Set();
-    const uniq = [];
-    for (const a of freeAff){
-      const k = a.toLowerCase();
-      if (!seen.has(k)){ seen.add(k); uniq.push(a); }
-    }
-
-    return { affByNum, freeAff: uniq.slice(0, 30) };
+    return out.slice(0, 80);
   }
 
-  function parseAuthorAffNumbersFromFirstPage(text, authors){
-    const map = new Map(); // surnameLower -> Set(nums)
-    if (!text || !authors?.length) return map;
+  function nameToKey(name){
+    return String(name||"").toLowerCase().replace(/[^a-z0-9\s\-]/g,"").replace(/\s+/g," ").trim();
+  }
 
-    const lines = text.replace(/\r/g,"\n").split("\n").map(l=>l.trim()).filter(Boolean);
-    const candidate = lines.find(l => l.length > 40 && /\d/.test(l) && /,/.test(l));
-    if (!candidate) return map;
+  function matchAffLineToAuthor(affLine, authors){
+    // affLine example: "Emilia Alvarez, University of Bristol, Orcid ID ..."
+    const first = String(affLine||"").split(",")[0].trim();
+    const key = nameToKey(first);
 
+    // try surname match first
     for (const a of authors){
-      const surname = (a.keyname||"").trim();
-      if (!surname) continue;
-      const re = new RegExp(`\\b${surname.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}\\b\\s*([0-9,\\s*†‡]+)`, "i");
-      const m = re.exec(candidate);
-      if (m){
-        const nums = (m[1]||"")
-          .replace(/[^\d,]/g,"")
-          .split(",")
-          .map(x=>x.trim())
-          .filter(Boolean);
-        if (nums.length){
-          const sKey = surname.toLowerCase();
-          if (!map.has(sKey)) map.set(sKey, new Set());
-          nums.forEach(n => map.get(sKey).add(n));
-        }
-      }
+      const sur = nameToKey(a.surname || a.keyname || "");
+      if (sur && key.endsWith(" " + sur) || key === sur) return a;
     }
-    return map;
-  }
-
-  async function getPdfPageText(pageNum){
-    if (state.pdfTextByPage.has(pageNum)) return state.pdfTextByPage.get(pageNum);
-    const page = await state.pdfDoc.getPage(pageNum);
-    const txt = await page.getTextContent();
-    const text = txt.items.map(it => it.str || "").join("\n");
-    state.pdfTextByPage.set(pageNum, text);
-    return text;
-  }
-
-  async function collectAffiliationsAndEmails(authors){
-    const total = state.pdfPageCount || 0;
-    if (!total) return { authorsWithAff: authors, affCount: 0, emails: [], affByNum: new Map() };
-
-    const pagesToScan = new Set([1, total]);
-    if (total >= 2) pagesToScan.add(2);
-    if (total >= 3) pagesToScan.add(total-1);
-
-    const globalAffByNum = new Map();
-    const globalFreeAff = [];
-    const globalEmails = [];
-
-    for (const p of [...pagesToScan]){
-      if (p < 1 || p > total) continue;
-      const t = await getPdfPageText(p);
-
-      extractEmails(t).forEach(e => globalEmails.push(e));
-
-      const { affByNum, freeAff } = extractAffiliationLinesFromText(t);
-      for (const [n, v] of affByNum.entries()){
-        if (!globalAffByNum.has(n)) globalAffByNum.set(n, v);
-      }
-      freeAff.forEach(x => globalFreeAff.push(x));
+    // fallback: any word overlap with full name
+    for (const a of authors){
+      const full = nameToKey(`${a.given||a.forenames||""} ${a.surname||a.keyname||""}`);
+      if (!full) continue;
+      if (full && (key.includes(full) || full.includes(key))) return a;
     }
-
-    const seen = new Set();
-    const uniqFree = [];
-    for (const a of globalFreeAff){
-      const k = a.toLowerCase();
-      if (!seen.has(k)){ seen.add(k); uniqFree.push(a); }
-    }
-
-    const firstPageText = await getPdfPageText(1);
-    const authorNums = parseAuthorAffNumbersFromFirstPage(firstPageText, authors);
-
-    const authorsOut = (authors||[]).map(a => ({...a, affiliations: [], email: a.email || null}));
-
-    for (const a of authorsOut){
-      const s = (a.keyname||"").toLowerCase();
-      const nums = authorNums.get(s);
-      if (nums && nums.size){
-        const affs = [];
-        for (const n of nums){
-          if (globalAffByNum.has(n)) affs.push(globalAffByNum.get(n));
-        }
-        if (affs.length) a.affiliations = affs;
-      }
-    }
-
-    const emailsDedup = [...new Set(globalEmails.map(e=>e.toLowerCase()))].slice(0, 50);
-    for (const a of authorsOut){
-      const surname = (a.keyname||"").toLowerCase();
-      if (!surname) continue;
-      const hit = emailsDedup.find(e => e.includes(surname));
-      if (hit) a.email = hit;
-    }
-
-    // IMPORTANT: if there are >1 freeAff and >1 authors and no indicators, DO NOT guess.
-    // Only attach freeAff if there is exactly 1 author (safe), otherwise ignore.
-    if (!globalAffByNum.size && uniqFree.length){
-      if (authorsOut.length === 1){
-        authorsOut[0].affiliations = uniqFree.slice(0, 8);
-      }
-    }
-
-    return { authorsWithAff: authorsOut, affCount: globalAffByNum.size + (authorsOut.length===1 ? uniqFree.length : 0), emails: emailsDedup, affByNum: globalAffByNum };
+    return null;
   }
 
   // ----------------------------
-  // Author XML helpers (no empty tags)
+  // Build Elsevier XML (NO EMPTY TAGS)
   // ----------------------------
-  function computeInitialsFromGiven(given){
-    const parts = String(given||"").trim().split(/\s+/).filter(Boolean);
-    if (!parts.length) return "";
-    // keep hyphen initials like Brice-Olivier => B.-O.
-    const chunks = [];
-    for (const p of parts){
-      if (p.includes("-")){
-        const sub = p.split("-").filter(Boolean).map(x => (x[0]||"").toUpperCase() + ".").join("-");
-        chunks.push(sub);
-      } else {
-        chunks.push((p[0]||"").toUpperCase() + ".");
-      }
-    }
-    return chunks.join("");
-  }
-
-  function authorXml(a, seq){
-    const given = (a.forenames||"").trim();
-    const surname = (a.keyname||"").trim();
-    const initials = computeInitialsFromGiven(given);
-
-    const attrs = [];
-    if (a.orcid) attrs.push(`orcid="${escapeXml(a.orcid)}"`);
-    attrs.push(`seq="${seq}"`);
-
-    const chunks = [];
-    if (initials) chunks.push(`              <ce:initials>${escapeXml(initials)}</ce:initials>`);
-    if (a.degrees && a.degrees.length) chunks.push(`              <ce:degrees>${escapeXml(a.degrees[0])}</ce:degrees>`);
-    if (surname) chunks.push(`              <ce:surname>${escapeXml(surname)}</ce:surname>`);
-    if (given) chunks.push(`              <ce:given-name>${escapeXml(given)}</ce:given-name>`);
-    if (a.email) chunks.push(`              <ce:e-address>${escapeXml(a.email)}</ce:e-address>`);
-
-    return `            <author ${attrs.join(" ")}>\n${chunks.join("\n")}\n            </author>`;
-  }
-
-  // ----------------------------
-  // Build Elsevier XML (author-groups BY affiliation)
-  // ----------------------------
-  function buildAuthorGroupsByAffiliation(authors){
-    const authList = (authors||[]).map((a, idx) => ({...a, _seq: idx+1}));
-
-    // Map affiliation string -> list of authors
-    const map = new Map();
-    for (const a of authList){
-      const affs = (a.affiliations||[]).map(x => String(x||"").trim()).filter(Boolean);
-      if (!affs.length){
-        // special bucket for no affiliation
-        const key = "__NO_AFF__:" + a._seq;
-        map.set(key, { affText: "", authors: [a] });
-        continue;
-      }
-      for (const aff of affs){
-        const k = aff.toLowerCase();
-        if (!map.has(k)) map.set(k, { affText: aff, authors: [] });
-        map.get(k).authors.push(a);
-      }
-    }
-
-    // Stable order: (1) real affiliations first, (2) no-aff buckets last
-    const entries = [...map.values()].sort((x,y) => {
-      if (!!x.affText && !y.affText) return -1;
-      if (!x.affText && !!y.affText) return 1;
-      return (x.affText||"").localeCompare(y.affText||"");
-    });
-
-    let groupSeq = 1;
-    const groupsXml = [];
-
-    for (const g of entries){
-      const authorsInGroup = g.authors || [];
-      const authorsXml = authorsInGroup
-        .map((a, i) => authorXml(a, a._seq))
-        .join("\n");
-
-      const affXml = g.affText
-        ? `            <affiliation>
-              <!-- telemetry: {"confidence": 0.25} -->
-              <ce:source-text>${escapeXml(g.affText)}</ce:source-text>
-            </affiliation>`
-        : `            <affiliation>
-              <!-- telemetry: {"confidence": 0.00} -->
-              <ce:source-text></ce:source-text>
-            </affiliation>`;
-
-      groupsXml.push(
-`          <author-group seq="${groupSeq}">
-${authorsXml}
-${affXml}
-          </author-group>`
-      );
-      groupSeq++;
-    }
-
-    return groupsXml.join("\n");
-  }
-
   function buildElsevierXml({ arxivIdWithVersion, chosenTitle, abstractText, keywords, authors, references }) {
     const nowIso = new Date().toISOString();
 
     const kwXml = (keywords?.length)
-      ? `            <author-keywords>\n${keywords.map(k => `              <author-keyword>${escapeXml(k)}</author-keyword>`).join("\n")}\n            </author-keywords>\n`
+      ? `<author-keywords>\n${keywords.map(k => `              <author-keyword>${escapeXml(k)}</author-keyword>`).join("\n")}\n            </author-keywords>\n`
       : "";
 
-    const authorGroupsXml = buildAuthorGroupsByAffiliation(authors);
+    const authorGroupsXml = (authors || []).map((a, i) => {
+      const given = (a.given || a.forenames || "").trim();
+      const surname = (a.surname || a.keyname || "").trim();
+      const initials = (a.initials || makeInitials(given) || "").trim();
+
+      // Build author tag with optional orcid attribute? (You used nested in examples, but arXiv API varies)
+      const email = (a.email || (a.emails && a.emails[0]) || "").trim();
+      const orcid = (a.orcid || "").trim();
+      const degrees = (a.degrees || []).filter(Boolean);
+
+      const degXml = degrees.length ? `\n              <ce:degrees>${escapeXml(degrees.join(" "))}</ce:degrees>` : "";
+      const emailXml = email ? `\n              <ce:e-address>${escapeXml(email)}</ce:e-address>` : "";
+
+      // affiliations: only if present (NO empty tags)
+      const affs = (a.affiliations || []).map(x => String(x||"").trim()).filter(Boolean).slice(0, 10);
+      const affXml = affs.length
+        ? affs.map(src => `            <affiliation>
+              <ce:source-text>${escapeXml(src)}</ce:source-text>
+            </affiliation>`).join("\n")
+        : "";
+
+      const orcidAttr = orcid ? ` orcid="${escapeXml(orcid)}"` : "";
+
+      return `          <author-group seq="${i+1}">
+            <author seq="${i+1}"${orcidAttr}>
+              <ce:initials>${escapeXml(initials)}</ce:initials>${degXml}
+              <ce:surname>${escapeXml(surname)}</ce:surname>
+              <ce:given-name>${escapeXml(given)}</ce:given-name>${emailXml}
+            </author>
+${affXml ? affXml + "\n" : ""}          </author-group>`;
+    }).join("\n");
 
     const absXml = abstractText
       ? `          <abstracts>
@@ -945,7 +829,13 @@ ${kwXml}          </citation-info>
           <citation-title>
             <titletext xml:lang="ENG" original="y">${escapeXml(chosenTitle)}</titletext>
           </citation-title>
-${authorGroupsXml}
+${authorGroupsXml || `          <author-group seq="1">
+            <author seq="1">
+              <ce:initials></ce:initials>
+              <ce:surname></ce:surname>
+              <ce:given-name></ce:given-name>
+            </author>
+          </author-group>`}
 ${absXml}          <source srcid="???"/>
         </head>
         <tail>
@@ -1192,12 +1082,42 @@ ${absXml}          <source srcid="???"/>
     await renderPdfPage(state.pdfPageNum);
   });
 
-  // ----------------------------
-  // Strict ID+Version validation logic
-  // ----------------------------
-  function isFullIdVer(x){
-    return !!(x?.id && x?.version);
+  async function getPdfPageText(pageNum){
+    if (state.pdfTextByPage.has(pageNum)) return state.pdfTextByPage.get(pageNum);
+    const page = await state.pdfDoc.getPage(pageNum);
+    const txt = await page.getTextContent();
+    const text = txt.items.map(it => it.str || "").join("\n");
+    state.pdfTextByPage.set(pageNum, text);
+    return text;
   }
+
+  async function getPdfAllTextLimited(){
+    const total = state.pdfPageCount || 0;
+    let out = "";
+    for (let p=1;p<=total;p++){
+      const t = await getPdfPageText(p);
+      out += "\n" + t;
+      if (out.length > 420000) break;
+    }
+    return out;
+  }
+
+  function guessPdfTitleFromFirstPage(p1){
+    if (!p1) return "";
+    const lines = p1.replace(/\r/g,"\n").split("\n").map(x=>x.trim()).filter(Boolean);
+    const filtered = lines.filter(l => !/arxiv:\d{4}\.\d{4,5}/i.test(l));
+    const head = filtered.slice(0, 30);
+    let best = "";
+    for (const l of head){
+      if (l.length > best.length) best = l;
+    }
+    return best.trim();
+  }
+
+  // ----------------------------
+  // Strict validation logic
+  // ----------------------------
+  function isFullIdVer(x){ return !!(x?.id && x?.version); }
   function idVerEqual(a,b){
     return normId(a?.id) === normId(b?.id) && normVer(a?.version) === normVer(b?.version);
   }
@@ -1217,7 +1137,7 @@ ${absXml}          <source srcid="???"/>
       const scrape = scrapeRaw ? parseScrapeXml(scrapeRaw) : null;
       const html = htmlRaw ? parseHtmlLanding(htmlRaw) : null;
 
-      // PDF ID/Version from page 1
+      // PDF ID/version from page 1
       const p1 = await getPdfPageText(1);
       const pdfIdVer = extractArxivFromText(p1);
       const pdfHasId = !!pdfIdVer.id;
@@ -1233,14 +1153,13 @@ ${absXml}          <source srcid="???"/>
       scrIdVal.textContent  = scrIdVer.id || "—";
       scrVerVal.textContent = scrIdVer.version || "—";
 
-      // Titles
       const pdfTitleGuess = guessPdfTitleFromFirstPage(p1);
       const htmlTitle = (html?.title||"").trim();
 
       const titleSame = titlesExactlySame(pdfTitleGuess, htmlTitle);
       titleCheckVal.innerHTML = titleSame ? badge("OK – same (strict)", "good") : badge("HOLD – mismatch", "bad");
 
-      // STRICT validation
+      // STRICT validation per your rule set
       let holdReason = "";
       let okToProcess = false;
 
@@ -1304,36 +1223,37 @@ ${absXml}          <source srcid="???"/>
 
       const chosenTitle = chooseTitle(pdfTitleGuess, htmlTitle);
 
-      // Abstract: prefer API then HTML, strip TeX
       const absText = stripTeXMath((api?.abstract || html?.abstract || "").trim());
 
-      // Keywords: STRICT ONLY from explicit keyword headings in first pages
-      const p2 = state.pdfPageCount >= 2 ? await getPdfPageText(2) : "";
-      const keywords = extractKeywordsStrictFromFirstPages([p1, p2]);
+      // STRICT KEYWORDS: only if explicit "Keywords:" line exists
+      const pdfAllText = await getPdfAllTextLimited();
+      const kw = extractKeywordsStrictFromPdfText(pdfAllText);
 
       // Authors: from API
-      const authors = api?.authors || [];
+      const authors = (api?.authors || []).map(a => ({
+        ...a,
+        affiliations: Array.isArray(a.affiliations) ? a.affiliations : []
+      }));
 
-      // Affiliations + emails scan first/last pages (safe mapping)
-      const { authorsWithAff, affCount } = await collectAffiliationsAndEmails(authors);
+      // AFFILIATIONS: scan last pages for "Affiliations" section and link by author name
+      const affLinkedCount = await linkAffiliationsFromPdf(authors);
 
-      // References: from PDF full text (limited)
-      const pdfAllText = await getPdfAllTextLimited();
-      const refs = extractReferencesFromPdfText(pdfAllText);
+      // REFERENCES: better splitting + remove numbering
+      const refs = extractReferencesFromPdfTextBetter(pdfAllText);
 
       titleVal.textContent = chosenTitle || "—";
       absVal.innerHTML = absText ? badge("Yes", "good") : badge("No", "warn");
-      kwVal.innerHTML = keywords.length ? badge(`${keywords.length} keyword(s)`, "good") : badge("None", "warn");
-      authVal.innerHTML = authorsWithAff.length ? badge(`API authors: ${authorsWithAff.length}`, "good") : badge("No authors", "warn");
-      affVal.innerHTML = affCount ? badge(`${affCount} found`, "good") : badge("None found", "warn");
+      kwVal.innerHTML = kw.length ? badge(`${kw.length} keyword(s)`, "good") : badge("None", "warn");
+      authVal.innerHTML = authors.length ? badge(`API authors: ${authors.length}`, "good") : badge("No authors", "warn");
+      affVal.innerHTML = affLinkedCount ? badge(`${affLinkedCount} linked`, "good") : badge("None linked", "warn");
       refVal.innerHTML = refs.length ? badge(`${refs.length} ref(s)`, "good") : badge("0", "warn");
 
       const xml = buildElsevierXml({
         arxivIdWithVersion,
         chosenTitle,
         abstractText: absText,
-        keywords,
-        authors: authorsWithAff,
+        keywords: kw,
+        authors,
         references: refs
       });
 
@@ -1346,27 +1266,62 @@ ${absXml}          <source srcid="???"/>
     }
   });
 
-  async function getPdfAllTextLimited(){
+  async function linkAffiliationsFromPdf(authors){
     const total = state.pdfPageCount || 0;
-    let out = "";
-    for (let p=1;p<=total;p++){
-      const t = await getPdfPageText(p);
-      out += "\n" + t;
-      if (out.length > 350000) break;
-    }
-    return out;
-  }
+    if (!total || !authors?.length) return 0;
 
-  function guessPdfTitleFromFirstPage(p1){
-    if (!p1) return "";
-    const lines = p1.replace(/\r/g,"\n").split("\n").map(x=>x.trim()).filter(Boolean);
-    const filtered = lines.filter(l => !/arxiv:\d{4}\.\d{4,5}/i.test(l) && !/^\s*\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b/.test(l));
-    const head = filtered.slice(0, 25);
-    let best = "";
-    for (const l of head){
-      if (l.length > best.length) best = l;
+    // Quick scan: last 8 pages backwards to find "Affiliations" heading
+    const maxBack = Math.min(10, total);
+    let affLines = [];
+    let foundOnPage = -1;
+
+    for (let k=0;k<maxBack;k++){
+      const p = total - k;
+      const t = await getPdfPageText(p);
+      const lines = parseAffiliationsSectionFromText(t);
+      if (lines.length){
+        affLines = lines;
+        foundOnPage = p;
+        break;
+      }
     }
-    return best.trim();
+
+    // If not found at extreme end, try last-12..last-25 (some papers have refs last page)
+    if (!affLines.length && total > 12){
+      for (let p=Math.max(1, total-25); p<=total-10; p++){
+        const t = await getPdfPageText(p);
+        const lines = parseAffiliationsSectionFromText(t);
+        if (lines.length){
+          affLines = lines;
+          foundOnPage = p;
+          break;
+        }
+      }
+    }
+
+    // If still not found: do nothing (no assumptions)
+    if (!affLines.length) return 0;
+
+    let linked = 0;
+    for (const line of affLines){
+      const a = matchAffLineToAuthor(line, authors);
+      if (!a) continue;
+      // affiliation source text = everything after first comma
+      const parts = String(line).split(",");
+      if (parts.length < 2) continue;
+      const src = parts.slice(1).join(",").replace(/\s+/g," ").trim();
+      if (!src) continue;
+
+      if (!Array.isArray(a.affiliations)) a.affiliations = [];
+      // avoid duplicates
+      const exists = a.affiliations.some(x => String(x).toLowerCase() === src.toLowerCase());
+      if (!exists){
+        a.affiliations.push(src);
+        linked++;
+      }
+    }
+
+    return linked;
   }
 
   // ----------------------------
