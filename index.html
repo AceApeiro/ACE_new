@@ -70,7 +70,7 @@
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <div>
           <div style="font-size:16px;font-weight:900;letter-spacing:.2px">ACE – Apeiro Citation Extractor (arXiv ZIP)</div>
-          <div class="muted">Upload a ZIP containing PDF + API XML + Scraping XML + HTML summary (+ optional FINAL Elsevier XML). Validate arXiv ID/version, STRICT output.</div>
+          <div class="muted">Upload a ZIP containing PDF + API XML + Scraping XML + HTML summary. Validate arXiv ID/version, validate title if PDF has no ID, generate strict Elsevier XML.</div>
         </div>
 
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -119,7 +119,6 @@
               <div class="tab" data-tab="htmlPane">HTML Summary</div>
               <div class="tab" data-tab="apiPane">API XML</div>
               <div class="tab" data-tab="scrapePane">Scrape XML</div>
-              <div class="tab" data-tab="finalPane">Final XML (ZIP)</div>
             </div>
           </div>
 
@@ -157,10 +156,6 @@
           <div id="scrapePane" class="pane">
             <textarea id="scrapeText" readonly placeholder="Scrape XML preview..."></textarea>
           </div>
-
-          <div id="finalPane" class="pane">
-            <textarea id="finalText" readonly placeholder="Final Elsevier XML (if inside ZIP)..."></textarea>
-          </div>
         </div>
 
         <!-- EXTRACTION -->
@@ -172,24 +167,36 @@
 
           <div class="box">
             <div class="boxHead">
-              <div class="small muted">Validation checks</div>
+              <div class="small muted">Validation checks (conditional-formatting logic)</div>
             </div>
             <div class="boxBody">
               <div class="kv">
-                <div class="k">Detected arXiv ID</div><div class="mono" id="arxivIdVal">—</div>
-                <div class="k">Detected version</div><div class="mono" id="versionVal">—</div>
-                <div class="k">ID/Version match</div><div id="matchVal">—</div>
+                <div class="k">PDF arXiv ID</div><div class="mono" id="pdfIdVal">—</div>
+                <div class="k">HTML arXiv ID</div><div class="mono" id="htmlIdVal">—</div>
+                <div class="k">Scrape arXiv ID</div><div class="mono" id="scrapeIdVal">—</div>
+
+                <div class="k">PDF version</div><div class="mono" id="pdfVerVal">—</div>
+                <div class="k">HTML version</div><div class="mono" id="htmlVerVal">—</div>
+                <div class="k">Scrape version</div><div class="mono" id="scrapeVerVal">—</div>
+
+                <div class="k">Title (PDF)</div><div id="pdfTitleVal">—</div>
+                <div class="k">Title (HTML)</div><div id="htmlTitleVal">—</div>
+
+                <div class="k">PROCESS / HOLD</div><div id="matchVal">—</div>
+
                 <div class="k">Chosen title</div><div id="titleVal">—</div>
                 <div class="k">Abstract found?</div><div id="absVal">—</div>
-                <div class="k">Keywords source</div><div id="kwVal">—</div>
-                <div class="k">Authors/Affils/Refs</div><div id="authVal">—</div>
+                <div class="k">Keywords found?</div><div id="kwVal">—</div>
+                <div class="k">Authors found?</div><div id="authVal">—</div>
+                <div class="k">Affiliations found?</div><div id="affVal">—</div>
+                <div class="k">References found?</div><div id="refVal">—</div>
               </div>
             </div>
           </div>
 
           <div class="hr"></div>
 
-          <div class="title" style="margin-bottom:8px">Generated XML</div>
+          <div class="title" style="margin-bottom:8px">Generated XML (strict structure)</div>
           <textarea id="outXml" placeholder="Run Extraction to generate XML..." spellcheck="false"></textarea>
         </div>
 
@@ -214,7 +221,9 @@
     selected: { pdfName:null, apiName:null, scrapeName:null, htmlName:null, finalName:null },
     pdfDoc: null,
     pdfPageNum: 1,
-    pdfPageCount: 0
+    pdfPageCount: 0,
+    pdfTextByPage: [],
+    pdfAllText: ""
   };
 
   // ----------------------------
@@ -231,16 +240,24 @@
 
   const apiText = document.getElementById("apiText");
   const scrapeText = document.getElementById("scrapeText");
-  const finalText = document.getElementById("finalText");
   const htmlPreview = document.getElementById("htmlPreview");
 
-  const arxivIdVal = document.getElementById("arxivIdVal");
-  const versionVal = document.getElementById("versionVal");
+  const pdfIdVal = document.getElementById("pdfIdVal");
+  const htmlIdVal = document.getElementById("htmlIdVal");
+  const scrapeIdVal = document.getElementById("scrapeIdVal");
+  const pdfVerVal = document.getElementById("pdfVerVal");
+  const htmlVerVal = document.getElementById("htmlVerVal");
+  const scrapeVerVal = document.getElementById("scrapeVerVal");
+  const pdfTitleVal = document.getElementById("pdfTitleVal");
+  const htmlTitleVal = document.getElementById("htmlTitleVal");
+
   const matchVal = document.getElementById("matchVal");
   const titleVal = document.getElementById("titleVal");
   const absVal = document.getElementById("absVal");
   const kwVal = document.getElementById("kwVal");
   const authVal = document.getElementById("authVal");
+  const affVal = document.getElementById("affVal");
+  const refVal = document.getElementById("refVal");
 
   const outXml = document.getElementById("outXml");
 
@@ -286,17 +303,49 @@
     return doc.body.innerHTML || "";
   }
 
-  const ARXIV_ID_RE = /(\d{4}\.\d{4,5})(v\d+)?/i;
+  // arXiv ID formats we care about
+  // - 2409.10724
+  // - arXiv:2409.10724v4
+  const ARXIV_NUM_RE = /(\d{4}\.\d{4,5})(v\d+)?/i;
 
   function extractArxivFromText(text) {
     if (!text) return { id:null, version:null };
+
+    // Most reliable: arXiv:NNNN.NNNNNvN
     const m1 = /arxiv:\s*(\d{4}\.\d{4,5})(v\d+)?/i.exec(text);
     if (m1) return { id: m1[1], version: (m1[2]||null) };
+
+    // OAI
     const m2 = /oai:arxiv\.org:(\d{4}\.\d{4,5})/i.exec(text);
     if (m2) return { id: m2[1], version: null };
-    const m3 = ARXIV_ID_RE.exec(text);
+
+    // Any bare numeric id
+    const m3 = ARXIV_NUM_RE.exec(text);
     if (m3) return { id: m3[1], version: (m3[2]||null) };
+
     return { id:null, version:null };
+  }
+
+  // HTML "Cite as" second line rule:
+  // "Cite as: arXiv:2409.10724 [..] (or arXiv:2409.10724v4 [..] for this version)"
+  function extractArxivFromHtmlCiteAs(htmlStr) {
+    try {
+      const doc = new DOMParser().parseFromString(htmlStr, "text/html");
+      const txt = (doc.body?.textContent || "").replace(/\s+/g, " ").trim();
+
+      // Prefer the "(or arXiv:XXXX.XXXXXvN ...)" version line if present
+      const mOr = /\(or\s+arxiv:\s*(\d{4}\.\d{4,5})(v\d+)\b/i.exec(txt);
+      if (mOr) return { id: mOr[1], version: mOr[2] };
+
+      // Else fall back to any arXiv:XXXX.XXXXXvN
+      const mA = /arxiv:\s*(\d{4}\.\d{4,5})(v\d+)?/i.exec(txt);
+      if (mA) return { id: mA[1], version: (mA[2] || null) };
+
+      // Else fallback to numeric
+      return extractArxivFromText(txt);
+    } catch {
+      return extractArxivFromText(htmlStr);
+    }
   }
 
   // --- XML helpers ---
@@ -307,13 +356,15 @@
 
   function parseApiXml(xmlStr) {
     const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
-    const id = xmlText(doc, "id");
+    const id = xmlText(doc, "id");      // usually "2409.09977"
     const title = xmlText(doc, "title");
     const abstract = xmlText(doc, "abstract");
+
     const authors = [...doc.getElementsByTagName("author")].map(a => ({
       keyname: xmlText(a, "keyname"),
       forenames: xmlText(a, "forenames")
     }));
+
     return { id, title, abstract, authors };
   }
 
@@ -321,10 +372,11 @@
     const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
     const item = doc.getElementsByTagName("item")[0];
     const id = item?.getAttribute("id") || "";
+
     const v = doc.getElementsByTagName("version")[0];
     let version = "";
     if (v) {
-      const number = v.getAttribute("number") || ""; // like [v1]
+      const number = v.getAttribute("number") || ""; // like [v4]
       const m = /\[v(\d+)\]/i.exec(number);
       if (m) version = "v" + m[1];
     }
@@ -334,11 +386,24 @@
   function parseHtmlLanding(htmlStr) {
     const doc = new DOMParser().parseFromString(htmlStr, "text/html");
     const bodyText = doc.body?.textContent || "";
-    const { id, version } = extractArxivFromText(bodyText);
+    const cite = extractArxivFromHtmlCiteAs(htmlStr);
+    const id = cite.id || extractArxivFromText(bodyText).id;
+    const version = cite.version || extractArxivFromText(bodyText).version;
 
     let title = (doc.querySelector('meta[name="citation_title"]')?.getAttribute("content") || "").trim();
     if (!title) title = (doc.title || "").trim();
 
+    // Try to find "Title:" label text on some arXiv HTML copies
+    if (!title) {
+      const titleLabel = [...doc.querySelectorAll("h1,h2,b,strong,td,div,span,p")]
+        .find(el => /title\s*:/i.test(el.textContent));
+      if (titleLabel) {
+        const m = /title\s*:\s*(.+)$/i.exec(titleLabel.textContent);
+        if (m) title = m[1].trim();
+      }
+    }
+
+    // Abstract from HTML page
     const fullText = bodyText.replace(/\s+/g," ").trim();
     let abstract = "";
     const absHeads = ["abstract","summary","synopsis","summary and conclusions"];
@@ -347,136 +412,381 @@
       if (idx !== -1) {
         const slice = fullText.slice(idx);
         const stop = slice.search(/\b(comments|subjects|cite as|submission history|full-text links)\b/i);
-        abstract = (stop > 0 ? slice.slice(0, stop) : slice).replace(new RegExp(`\\b${h}\\b\\s*:?\\s*`,"i"), "").trim();
+        abstract = (stop > 0 ? slice.slice(0, stop) : slice)
+          .replace(new RegExp(`\\b${h}\\b\\s*:?\\s*`,"i"), "")
+          .trim();
         break;
       }
     }
 
-    return { id, version, title, abstract, sanitizedHtml: stripScripts(htmlStr) };
+    return { id, version, title, abstract, sanitizedHtml: stripScripts(htmlStr), bodyText };
   }
 
-  // STRICT keywords: final xml OR explicit PDF "Keywords:"
-  function detectKeywordsFromText_STRICT(text) {
-    if (!text) return [];
-    // common explicit patterns
-    const m =
-      /\bkeywords?\b\s*[:\-]\s*([^\n\r]+)/i.exec(text) ||
-      /\bkeywords?\b\s*\n\s*([^\n\r]+)/i.exec(text);
+  // ----------------------------
+  // Title rules (your logic)
+  // ----------------------------
+  function cleanTitleForCompare(s) {
+    if (!s) return "";
+    let t = String(s);
 
-    if (!m) return [];
-    const raw = (m[1] || "").trim();
+    // Remove "Preprint" (anywhere, case-insensitive)
+    t = t.replace(/\bpreprint\b/ig, "").trim();
+
+    // Remove trailing asterisks used as markers
+    t = t.replace(/\*+$/g, "").trim();
+
+    // Remove purely formatting $...$ wrappers (keep inside)
+    // Example: "$z > 6$" should compare as "z > 6"
+    t = t.replace(/\$/g, "");
+
+    // Collapse whitespace only (do NOT normalize punctuation/hyphens)
+    t = t.replace(/\s+/g, " ").trim();
+
+    return t;
+  }
+
+  function titlesMatchStrict(pdfTitle, htmlTitle) {
+    // Hyphen differences should count as mismatch => we do NOT normalize hyphens
+    return cleanTitleForCompare(pdfTitle) === cleanTitleForCompare(htmlTitle);
+  }
+
+  // Choose title rule:
+  // - If not totally different => choose the more complete one
+  // - If any mismatch in content => choose HTML
+  // Your simplified safe rule: if not EXACT match -> choose HTML
+  function chooseTitle(pdfTitle, htmlTitle) {
+    const p = cleanTitleForCompare(pdfTitle);
+    const h = cleanTitleForCompare(htmlTitle);
+    if (!p && h) return htmlTitle;
+    if (!h && p) return pdfTitle;
+    if (p === h) {
+      // choose more complete (longer raw string)
+      return (String(pdfTitle).length >= String(htmlTitle).length) ? pdfTitle : htmlTitle;
+    }
+    // mismatch => HTML
+    return htmlTitle || pdfTitle;
+  }
+
+  // ----------------------------
+  // Keywords extraction (REAL)
+  // - Supports: Keywords / Key words / Index Terms / Keywords and Phrases / Subject Headings
+  // - Split by common separators; DO NOT split by space
+  // - Prefer keywords AFTER Abstract if both exist
+  // ----------------------------
+  const KW_HEAD_RE = /\b(key\s*words?|keywords?\s*and\s*phrases|index\s*terms|subject\s*headings)\b\s*[:\-–—]?\s*/ig;
+
+  function splitKeywords(raw) {
     if (!raw) return [];
-    return raw
-      .split(/[;•,\u2022|·\u00b7\/]+/)
-      .map(s => s.trim())
-      .filter(Boolean);
+    let s = raw.trim();
+
+    // Stop at common next-section headings
+    s = s.split(/\b(abstract|introduction|1\.\s*introduction|background|methods|conclusions)\b/i)[0].trim();
+
+    // Remove leading heading remnants if any
+    s = s.replace(/^\s*(key\s*words?|keywords?|index\s*terms|subject\s*headings)\s*[:\-–—]?\s*/i, "");
+
+    // Split by separators (NOT space)
+    const parts = s.split(/[;•,\u2022|·\u00b7\/]+/).map(x => x.trim()).filter(Boolean);
+
+    // Also handle dashed separators used between terms, BUT keep hyphenated words
+    // We only split on " - " or " – " patterns with surrounding spaces
+    const expanded = [];
+    for (const p of parts) {
+      const sub = p.split(/\s[–—-]\s/g).map(x => x.trim()).filter(Boolean);
+      expanded.push(...sub);
+    }
+    return expanded.filter(Boolean);
   }
+
+  function extractKeywordsFromTextBlock(text) {
+    if (!text) return [];
+
+    // Find all occurrences of headings
+    const matches = [];
+    let m;
+    KW_HEAD_RE.lastIndex = 0;
+    while ((m = KW_HEAD_RE.exec(text)) !== null) {
+      matches.push({ idx: m.index, head: m[0] });
+    }
+    if (!matches.length) return [];
+
+    // Prefer the occurrence AFTER abstract if abstract exists
+    const absIdx = text.toLowerCase().indexOf("abstract");
+    let pick = matches[matches.length - 1];
+    if (absIdx !== -1) {
+      const afterAbs = matches.filter(x => x.idx > absIdx);
+      if (afterAbs.length) pick = afterAbs[afterAbs.length - 1];
+    }
+
+    const slice = text.slice(pick.idx);
+    // Take a limited window to avoid capturing half the paper
+    const window = slice.slice(0, 800);
+
+    // Remove the heading and capture rest of line / paragraph start
+    const afterHead = window.replace(KW_HEAD_RE, "").trim();
+
+    // Keywords often end at newline-ish; PDF text might be single-line, so also stop at double spaces before next section
+    const stopAt = afterHead.search(/\b(abstract|introduction|1\.\s*introduction|classification|pacs|msc|jel)\b/i);
+    const raw = (stopAt > 0 ? afterHead.slice(0, stopAt) : afterHead).trim();
+
+    return splitKeywords(raw);
+  }
+
+  // ----------------------------
+  // Abstract extraction (prefer API, else PDF/HTML)
+  // and preserve unicode super/sub into tags (best effort)
+  // ----------------------------
+  const SUP_MAP = {
+    "⁰":"0","¹":"1","²":"2","³":"3","⁴":"4","⁵":"5","⁶":"6","⁷":"7","⁸":"8","⁹":"9","⁻":"-","⁺":"+"
+  };
+  const SUB_MAP = {
+    "₀":"0","₁":"1","₂":"2","₃":"3","₄":"4","₅":"5","₆":"6","₇":"7","₈":"8","₉":"9","₋":"-","₊":"+"
+  };
 
   function escapeXml(s){
     return String(s||"").replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
   }
 
-  // Pretty print XML for display/download
-  function prettyXml(xml) {
-    try {
-      const PADDING = "  ";
-      const reg = /(>)(<)(\/*)/g;
-      let formatted = "";
-      let pad = 0;
-      xml = xml.replace(/\r/g, "").replace(reg, "$1\n$2$3");
-      xml.split("\n").forEach(line => {
-        if (line.match(/^<\/\w/)) pad = Math.max(pad - 1, 0);
-        formatted += PADDING.repeat(pad) + line.trim() + "\n";
-        if (line.match(/^<\w([^>]*[^\/])?>$/) && !line.startsWith("<?") && !line.startsWith("<!")) pad += 1;
-      });
-      return formatted.trim();
-    } catch {
-      return xml;
+  // Converts unicode superscripts/subscripts into <sup> / <inf> sequences
+  function encodeSuperSubToXml(text) {
+    if (!text) return "";
+    let out = "";
+    let i = 0;
+
+    function readRun(map) {
+      let run = "";
+      while (i < text.length && map[text[i]]) {
+        run += map[text[i]];
+        i++;
+      }
+      return run;
     }
+
+    while (i < text.length) {
+      const ch = text[i];
+      if (SUP_MAP[ch]) {
+        const run = readRun(SUP_MAP);
+        out += `<sup>${escapeXml(run)}</sup>`;
+        continue;
+      }
+      if (SUB_MAP[ch]) {
+        const run = readRun(SUB_MAP);
+        // Elsevier example shows <inf> for subscript letters; for digits we'll still use <inf>
+        out += `<inf>${escapeXml(run)}</inf>`;
+        continue;
+      }
+      out += escapeXml(ch);
+      i++;
+    }
+    return out;
+  }
+
+  function extractAbstractFromPdfText(pdfText) {
+    if (!pdfText) return "";
+    const t = pdfText.replace(/\s+/g, " ").trim();
+    const heads = ["abstract", "summary", "synopsis", "summary and conclusions"];
+    for (const h of heads) {
+      const idx = t.toLowerCase().indexOf(h);
+      if (idx !== -1) {
+        const slice = t.slice(idx);
+        const stop = slice.search(/\b(key\s*words?|keywords?|index\s*terms|subject\s*headings|introduction|1\.\s*introduction|contents)\b/i);
+        const body = (stop > 0 ? slice.slice(0, stop) : slice)
+          .replace(new RegExp(`\\b${h}\\b\\s*:?\\s*`,"i"), "")
+          .trim();
+        return body;
+      }
+    }
+    return "";
   }
 
   // ----------------------------
-  // FINAL ELSEVIER XML helpers (STRICT TEMPLATE)
+  // References extraction from PDF (best effort)
   // ----------------------------
-  function looksLikeElsevierFinalXml(xmlStr) {
-    const head = (xmlStr || "").slice(0, 4000);
-    return (
-      head.includes('xmlns="http://www.elsevier.com/xml/ani/ani"') &&
-      /<units\b/i.test(head) &&
-      /<unit\b/i.test(head) &&
-      /<bibrecord\b/i.test(head)
-    );
+  function extractReferencesFromPdfText(pdfText) {
+    if (!pdfText) return [];
+    const t = pdfText.replace(/\r/g, "\n");
+    const lowerT = t.toLowerCase();
+
+    let start = -1;
+    const heads = ["references", "bibliography"];
+    for (const h of heads) {
+      const idx = lowerT.lastIndexOf("\n" + h);
+      if (idx !== -1) { start = idx; break; }
+    }
+    if (start === -1) {
+      const idx2 = lowerT.lastIndexOf(hadsafe("\nreferences"));
+      if (idx2 !== -1) start = idx2;
+    }
+    if (start === -1) return [];
+
+    let tail = t.slice(start);
+    tail = tail.replace(/^\s*(references|bibliography)\s*/i, "").trim();
+
+    // Try split by common numbering patterns
+    // [1] ...  OR  1. ...  OR  1 ... (at line starts)
+    const lines = tail.split("\n").map(x => x.trim()).filter(Boolean);
+
+    const refs = [];
+    let cur = "";
+
+    function pushCur() {
+      const r = cur.trim();
+      if (r) refs.push(r);
+      cur = "";
+    }
+
+    const startsNew = (line) =>
+      /^\[\s*\d+\s*\]/.test(line) ||
+      /^(\d+)\.\s+/.test(line) ||
+      /^(\d+)\s+/.test(line);
+
+    for (const line of lines) {
+      if (startsNew(line)) {
+        pushCur();
+        cur = line.replace(/^\[\s*\d+\s*\]\s*/, "").replace(/^(\d+)\.\s+/, "").replace(/^(\d+)\s+/, "");
+      } else {
+        cur += (cur ? " " : "") + line;
+      }
+      if (refs.length >= 300) break;
+    }
+    pushCur();
+
+    // Clean duplicates / too short
+    return refs.map(r => r.replace(/\s+/g, " ").trim()).filter(r => r.length > 10);
   }
 
-  function parseFinalElsevier(xmlStr) {
-    const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
-    const itemid = [...doc.getElementsByTagName("itemid")].find(x => (x.getAttribute("idtype")||"").toUpperCase() === "ARXIV");
-    const arxiv = itemid?.textContent?.trim() || "";
+  function hadsafe(s){ return s; } // placeholder, keeps code safe
 
-    const titletext = doc.getElementsByTagName("titletext")[0]?.textContent?.trim() || "";
+  // ----------------------------
+  // Affiliations extraction from PDF first page (best effort)
+  // ----------------------------
+  function extractAffiliationsFromFirstPageText(pageText) {
+    if (!pageText) return [];
+    const lines = pageText.split("\n").map(l => l.trim()).filter(Boolean);
 
-    const keywords = [...doc.getElementsByTagName("author-keyword")]
-      .map(k => (k.textContent||"").trim())
-      .filter(Boolean);
+    const aff = [];
+    const looksAff = (l) =>
+      /university|universit|institute|institut|department|dept\.|laboratory|centre|center|school|faculty|cnrs|infn|inaf|observator|hospital|clinic|research/i.test(l);
 
-    const refNodes = [...doc.getElementsByTagName("reference")];
-    const references = refNodes.map(r => {
-      const ft = r.getElementsByTagName("ref-fulltext")[0]?.textContent?.trim() || "";
-      return ft;
-    }).filter(Boolean);
+    for (const l of lines) {
+      if (looksAff(l) && l.length >= 12) aff.push(l);
+    }
 
-    const authorGroups = [...doc.getElementsByTagName("author-group")]; // keep as template pieces
-    const bibliography = doc.getElementsByTagName("bibliography")[0];
-
-    return { doc, arxiv, titletext, keywords, references, authorGroupsCount: authorGroups.length, hasBibliography: !!bibliography };
+    // De-dup
+    const uniq = [];
+    const seen = new Set();
+    for (const a of aff) {
+      const k = a.toLowerCase();
+      if (!seen.has(k)) { seen.add(k); uniq.push(a); }
+    }
+    return uniq.slice(0, 12);
   }
 
-  function setTextSafe(el, val) {
-    if (!el) return;
-    el.textContent = val ?? "";
+  // ORCID extraction (best effort)
+  function extractOrcids(text) {
+    const out = [];
+    const re = /\b(\d{4}-\d{4}-\d{4}-\d{3}[\dX])\b/g;
+    let m;
+    while ((m = re.exec(text)) !== null) out.push(m[1]);
+    return [...new Set(out)];
   }
 
-  function replaceArxivInFinalDoc(doc, arxivIdWithVersion) {
-    const items = [...doc.getElementsByTagName("itemid")];
-    const arx = items.find(x => (x.getAttribute("idtype")||"").toUpperCase() === "ARXIV");
-    if (arx) setTextSafe(arx, arxivIdWithVersion);
-  }
+  // ----------------------------
+  // Build strict Elsevier XML (structure matches your sample)
+  // ----------------------------
+  function buildElsevierXmlStrict({ arxivIdWithVersion, chosenTitle, abstractText, keywords, authors, affiliations, references }) {
+    const nowIso = new Date().toISOString();
 
-  function replaceTitleInFinalDoc(doc, chosenTitle) {
-    const t = doc.getElementsByTagName("titletext")[0];
-    if (t && chosenTitle) setTextSafe(t, chosenTitle);
-  }
+    const kwXml = (keywords?.length)
+      ? `            <author-keywords>
+${keywords.map(k => `              <author-keyword>${escapeXml(k)}</author-keyword>`).join("\n")}
+            </author-keywords>\n`
+      : "";
 
-  // We DO NOT overwrite abstract if template has it (keeps <sup> etc)
-  function maybeReplaceAbstractIfEmpty(doc, abstractText) {
-    if (!abstractText) return;
-    const para = doc.getElementsByTagName("ce:para")[0] || doc.getElementsByTagName("para")[0];
-    if (!para) return;
-    const existing = (para.textContent || "").trim();
-    if (!existing) setTextSafe(para, abstractText);
-  }
+    // Author-groups: one per author (seq increments), attach best-effort affiliation
+    const affText = affiliations?.[0] || "";
+    const authorsXml = (authors || []).map((a, i) => {
+      const given = a.forenames || "";
+      const surname = a.keyname || "";
+      const initials = given
+        .split(/\s+/).filter(Boolean)
+        .map(x => x[0].toUpperCase() + ".")
+        .join("");
 
-  function replaceKeywordsIfProvided(doc, keywords) {
-    if (!keywords || !keywords.length) return;
-    const ci = doc.getElementsByTagName("citation-info")[0];
-    if (!ci) return;
+      // If we have multiple affiliation candidates, rotate them (better than always same)
+      const affPick = (affiliations && affiliations.length) ? affiliations[Math.min(i, affiliations.length - 1)] : "";
 
-    // remove existing author-keywords
-    [...ci.getElementsByTagName("author-keywords")].forEach(n => n.remove());
+      const affXml = affPick ? `
+          <affiliation>
+            <!-- telemetry: {"confidence": 0.25} -->
+            <ce:source-text>${escapeXml(affPick)}</ce:source-text>
+          </affiliation>` : "";
 
-    const ak = doc.createElement("author-keywords");
-    keywords.forEach(k => {
-      const kk = doc.createElement("author-keyword");
-      kk.textContent = k;
-      ak.appendChild(kk);
-    });
-    ci.appendChild(ak);
-  }
+      return `          <author-group seq="${i+1}">
+            <author seq="${i+1}">
+              <ce:initials>${escapeXml(initials || "")}</ce:initials>
+              <ce:surname>${escapeXml(surname)}</ce:surname>
+              <ce:given-name>${escapeXml(given)}</ce:given-name>
+            </author>${affXml}
+          </author-group>`;
+    }).join("\n");
 
-  function serializeXml(doc) {
-    const xml = new XMLSerializer().serializeToString(doc);
-    // ensure xml header
-    return xml.startsWith("<?xml") ? xml : `<?xml version="1.0" encoding="utf-8"?>\n` + xml;
+    const absXml = abstractText
+      ? `          <abstracts>
+            <abstract original="y" xml:lang="ENG">
+              <ce:para>${encodeSuperSubToXml(abstractText)}</ce:para>
+            </abstract>
+          </abstracts>\n`
+      : "";
+
+    const refs = references || [];
+    const bibXml = refs.length
+      ? `          <bibliography refcount="${refs.length}">
+${refs.map((r, i) => `            <reference seq="${i+1}">
+              <ref-info/>
+              <ref-fulltext>${escapeXml(r)}</ref-fulltext>
+              <ce:source-text>${escapeXml(r)}</ce:source-text>
+            </reference>`).join("\n")}
+          </bibliography>`
+      : `          <bibliography refcount="0"/>`;
+
+    return `<?xml version="1.0" encoding="utf-8"?>
+<units xmlns="http://www.elsevier.com/xml/ani/ani" xmlns:ce="http://www.elsevier.com/xml/ani/common">
+  <unit type="ARTICLE">
+    <unit-info>
+      <unit-id>1</unit-id>
+      <order-id>unknown</order-id>
+      <parcel-id>none</parcel-id>
+      <supplier-id>4</supplier-id>
+      <timestamp>${escapeXml(nowIso)}</timestamp>
+    </unit-info>
+    <unit-content>
+      <bibrecord>
+        <item-info>
+          <status state="new"/>
+          <itemidlist>
+            <itemid idtype="ARXIV">${escapeXml(arxivIdWithVersion)}</itemid>
+          </itemidlist>
+        </item-info>
+        <head>
+          <citation-info>
+            <citation-type code="ar"/>
+            <citation-language xml:lang="ENG"/>
+            <abstract-language xml:lang="ENG"/>
+${kwXml}          </citation-info>
+          <citation-title>
+            <titletext xml:lang="ENG" original="y">${escapeXml(chosenTitle)}</titletext>
+          </citation-title>
+${authorsXml || "          <!-- No authors parsed -->"}
+${absXml}          <source srcid="???"/>
+        </head>
+        <tail>
+${bibXml}
+        </tail>
+      </bibrecord>
+    </unit-content>
+  </unit>
+</units>`;
   }
 
   // ----------------------------
@@ -494,45 +804,37 @@
 
     for (const n of xmlNames) {
       const txt = await zip.file(n).async("string");
-      const head = txt.slice(0, 8000).toLowerCase();
+      const head = txt.slice(0, 9000).toLowerCase();
 
-      // FINAL Elsevier
-      const looksFinal =
-        head.includes('xmlns="http://www.elsevier.com/xml/ani/ani"') &&
-        head.includes("<units") &&
-        head.includes("<bibrecord");
+      const looksFinal = head.includes("<units") && head.includes("elsevier.com/xml/ani");
+      if (!finalName && looksFinal) finalName = n;
 
-      // API/OAI
       const looksApi =
         head.includes("<record") ||
         head.includes("oai:arxiv.org:") ||
         head.includes("<arxiv") ||
-        head.includes("<feed");
+        head.includes("<metadata");
 
-      // Scrape XML
       const looksScrape =
         head.includes("<item") && head.includes("version") && head.includes("[v");
 
-      if (!finalName && looksFinal) finalName = n;
-      else {
-        if (!apiName && looksApi) apiName = n;
-        if (!scrapeName && looksScrape) scrapeName = n;
-      }
+      if (!apiName && looksApi && !looksFinal) apiName = n;
+      if (!scrapeName && looksScrape && !looksFinal) scrapeName = n;
     }
 
-    // Prefer filenames containing guessed id
+    // Prefer filename match if guessedId exists
     if (guessedId) {
-      const finalByName = xmlNames.find(n => n.includes(guessedId) && !n.includes("oai") && !n.includes("scrap"));
-      if (finalByName) {
-        const txt = await zip.file(finalByName).async("string");
-        if (looksLikeElsevierFinalXml(txt)) finalName = finalByName;
-      }
-
       const apiByName = xmlNames.find(n => n.includes(guessedId) && n !== scrapeName && n !== finalName);
-      if (apiByName && !finalName) apiName = apiByName;
+      if (apiByName) apiName = apiByName;
 
       const scrapeByName = xmlNames.find(n => n.includes(guessedId) && n !== apiName && n !== finalName);
-      if (scrapeByName && !apiName) scrapeName = scrapeByName;
+      if (scrapeByName) scrapeName = scrapeByName;
+
+      const finalByName = xmlNames.find(n => n.includes(guessedId) && n !== apiName && n !== scrapeName);
+      if (finalByName) {
+        const txt = await zip.file(finalByName).async("string");
+        if (txt.toLowerCase().includes("<units") && txt.toLowerCase().includes("elsevier.com/xml/ani")) finalName = finalByName;
+      }
     }
 
     const htmlName = (guessedId
@@ -581,23 +883,34 @@
     state.pdfs = [];
     state.selectedPdf = null;
     state.selected = { pdfName:null, apiName:null, scrapeName:null, htmlName:null, finalName:null };
+    state.pdfTextByPage = [];
+    state.pdfAllText = "";
 
     apiText.value = "";
     scrapeText.value = "";
-    finalText.value = "";
     htmlPreview.innerHTML = "No HTML loaded.";
     outXml.value = "";
 
     downloadBtn.disabled = true;
     runBtn.disabled = true;
 
-    arxivIdVal.textContent = "—";
-    versionVal.textContent = "—";
+    pdfIdVal.textContent = "—";
+    htmlIdVal.textContent = "—";
+    scrapeIdVal.textContent = "—";
+    pdfVerVal.textContent = "—";
+    htmlVerVal.textContent = "—";
+    scrapeVerVal.textContent = "—";
+    pdfTitleVal.textContent = "—";
+    htmlTitleVal.textContent = "—";
+
     matchVal.innerHTML = "—";
     titleVal.textContent = "—";
     absVal.innerHTML = "—";
     kwVal.innerHTML = "—";
     authVal.innerHTML = "—";
+    affVal.innerHTML = "—";
+    refVal.innerHTML = "—";
+
     selectedSet.textContent = "No set selected";
 
     clearPdf();
@@ -619,7 +932,7 @@
           <div style="font-weight:900;font-size:13px">${escapeHtml(pdfName.split("/").pop())}</div>
           <span class="badge">${escapeHtml(idGuess)}</span>
         </div>
-        <div class="muted" style="margin-top:6px">Auto-detects API/Scrape/HTML/Final by file content.</div>
+        <div class="muted" style="margin-top:6px">Auto-detects API/Scrape/HTML by file content.</div>
       `;
       div.addEventListener("click", () => selectPdf(idx));
       fileList.appendChild(div);
@@ -649,7 +962,6 @@
     await loadPdfFromZip(pdfName);
     await loadTextPreview(state.selected.apiName, apiText);
     await loadTextPreview(state.selected.scrapeName, scrapeText);
-    await loadTextPreview(state.selected.finalName, finalText);
     await loadHtmlPreview(state.selected.htmlName);
   }
 
@@ -669,7 +981,7 @@
   }
 
   // ----------------------------
-  // PDF preview
+  // PDF preview + text extraction
   // ----------------------------
   function clearPdf(){
     state.pdfDoc = null;
@@ -684,6 +996,9 @@
 
   async function loadPdfFromZip(name){
     clearPdf();
+    state.pdfTextByPage = [];
+    state.pdfAllText = "";
+
     const file = state.zip.file(name);
     if (!file) return;
 
@@ -694,6 +1009,17 @@
     state.pdfDoc = pdf;
     state.pdfPageCount = pdf.numPages;
     state.pdfPageNum = 1;
+
+    // Extract text (all pages) for rules, keywords, refs
+    const texts = [];
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const tc = await page.getTextContent();
+      const pageText = tc.items.map(it => it.str).join(" ");
+      texts.push(pageText);
+    }
+    state.pdfTextByPage = texts;
+    state.pdfAllText = texts.join("\n");
 
     await renderPdfPage(1);
   }
@@ -726,92 +1052,84 @@
   });
 
   // ----------------------------
-  // PDF text extraction (cap pages)
+  // VALIDATION LOGIC (your rules)
   // ----------------------------
-  async function extractPdfTextAllPagesCap(capPages = 80) {
-    if (!state.pdfDoc) return "";
-    const n = Math.min(state.pdfPageCount || 0, capPages);
-    let out = "";
-    for (let i=1; i<=n; i++) {
-      const page = await state.pdfDoc.getPage(i);
-      const content = await page.getTextContent();
-      const txt = content.items.map(it => it.str).join(" ");
-      out += txt + "\n";
-    }
-    return out;
+  function normalizeVersion(v){
+    if (!v) return "";
+    const m = /v(\d+)/i.exec(String(v).trim());
+    return m ? ("v" + m[1]) : "";
   }
 
-  // ----------------------------
-  // References fallback from PDF (robust)
-  // ----------------------------
-  function findRefsStartIndex(tLower) {
-    const patterns = [
-      /\breferences\b/,
-      /\bbibliography\b/,
-      /\breferences\s+and\s+notes\b/,
-      /\bworks\s+cited\b/
-    ];
-    for (const re of patterns) {
-      const m = re.exec(tLower);
-      if (m) return m.index;
-    }
-    return -1;
+  function normalizeId(id){
+    return (id || "").trim();
   }
 
-  function splitReferencesFromTail(tailText) {
-    const lines = tailText
-      .split("\n")
-      .map(x => x.trim())
-      .filter(Boolean);
+  // Process rules:
+  // A) If PDF has arXiv ID:
+  //    - IDs must match across PDF/HTML/Scrape (where present)
+  //    - Versions:
+  //        - If PDF has version => all three versions must match
+  //        - If PDF has NO version => HTML and Scrape versions must match (and exist)
+  //
+  // B) If PDF has NO arXiv ID:
+  //    - PDF title must match HTML title (strict compare after formatting-clean)
+  //    - Then HTML and Scrape ID+versions must match
+  //
+  function decideProcess({
+    pdfId, pdfVer,
+    htmlId, htmlVer,
+    scrapeId, scrapeVer,
+    pdfTitle, htmlTitle
+  }) {
+    const pid = normalizeId(pdfId);
+    const hid = normalizeId(htmlId);
+    const sid = normalizeId(scrapeId);
 
-    const refs = [];
-    let cur = "";
+    const pv = normalizeVersion(pdfVer);
+    const hv = normalizeVersion(htmlVer);
+    const sv = normalizeVersion(scrapeVer);
 
-    function pushCur() {
-      const s = cur.trim().replace(/\s+/g, " ");
-      if (s && s.length > 20) refs.push(s);
-      cur = "";
-    }
+    const hasPdfId = !!pid;
 
-    for (const line of lines) {
-      const isNew =
-        /^\[\s*\d+\s*\]/.test(line) ||
-        /^\d+\s*\.\s+/.test(line) ||
-        /^\(\s*\d+\s*\)\s+/.test(line) ||
-        /^\d+\)\s+/.test(line);
+    // Helper: ensure id equality for those present
+    const allIds = [pid, hid, sid].filter(Boolean);
+    const idsAllSame = allIds.length ? allIds.every(x => x === allIds[0]) : false;
 
-      if (isNew) {
-        pushCur();
-        cur = line
-          .replace(/^\[\s*\d+\s*\]\s*/, "")
-          .replace(/^\d+\s*\.\s+/, "")
-          .replace(/^\(\s*\d+\s*\)\s+/, "")
-          .replace(/^\d+\)\s+/, "");
-      } else {
-        cur += (cur ? " " : "") + line;
+    // Helper: versions logic
+    const htmlScrapeHave = !!hv && !!sv;
+    const htmlScrapeSame = htmlScrapeHave && hv === sv;
+
+    if (hasPdfId) {
+      if (!idsAllSame) return { ok:false, reason:"ID mismatch across support docs" };
+
+      // If PDF version exists -> must match all present (and require html+scrape exist)
+      if (pv) {
+        if (!hv || !sv) return { ok:false, reason:"PDF has version but HTML/Scrape missing version" };
+        if (!(pv === hv && pv === sv)) return { ok:false, reason:"Version mismatch (PDF vs HTML vs Scrape)" };
+        return { ok:true, reason:"OK: IDs match, versions match (PDF+HTML+Scrape)" };
       }
 
-      if (refs.length >= 800) break;
+      // PDF has no version -> HTML and Scrape versions must match
+      if (!htmlScrapeSame) return { ok:false, reason:"PDF has no version; HTML/Scrape versions must exist and match" };
+      return { ok:true, reason:"OK: IDs match; PDF no version; HTML+Scrape versions match" };
     }
 
-    pushCur();
+    // PDF has NO ID -> title must match first
+    if (!titlesMatchStrict(pdfTitle, htmlTitle)) {
+      return { ok:false, reason:"PDF has no ID; Title mismatch (PDF vs HTML) => HOLD" };
+    }
 
-    const uniq = [];
-    for (const r of refs) if (!uniq.includes(r)) uniq.push(r);
-    return uniq;
-  }
+    // Then HTML+Scrape ID+version must match
+    if (!hid || !sid) return { ok:false, reason:"PDF has no ID; HTML or Scrape missing ID" };
+    if (hid !== sid) return { ok:false, reason:"PDF has no ID; HTML vs Scrape ID mismatch" };
 
-  function parseReferencesFromPdf(pdfTextAll) {
-    if (!pdfTextAll) return [];
-    const t = pdfTextAll.replace(/\r/g, "");
-    const idx = findRefsStartIndex(t.toLowerCase());
-    if (idx === -1) return [];
-    const tail = t.slice(idx).replace(/^(references|bibliography|references and notes|works cited)\b/i, "").trim();
-    return splitReferencesFromTail(tail);
+    if (!htmlScrapeSame) return { ok:false, reason:"PDF has no ID; HTML/Scrape versions must exist and match" };
+
+    return { ok:true, reason:"OK: PDF no ID; titles match; HTML+Scrape ID+versions match" };
   }
 
   // ----------------------------
-  // Run Extraction (STRICT)
+  // Run Extraction
   // ----------------------------
   runBtn.addEventListener("click", async () => {
     try {
@@ -819,212 +1137,120 @@
 
       const apiRaw = apiText.value || "";
       const scrapeRaw = scrapeText.value || "";
-      const finalRaw = finalText.value || "";
-
-      const htmlRaw = state.selected.htmlName
-        ? await state.zip.file(state.selected.htmlName).async("string")
-        : "";
+      const htmlRaw = state.selected.htmlName ? await state.zip.file(state.selected.htmlName).async("string") : "";
+      const finalRaw = state.selected.finalName ? await state.zip.file(state.selected.finalName).async("string") : "";
 
       const api = apiRaw ? parseApiXml(apiRaw) : null;
       const scrape = scrapeRaw ? parseScrapeXml(scrapeRaw) : null;
       const html = htmlRaw ? parseHtmlLanding(htmlRaw) : null;
 
-      // IDs
-      const apiId = (api?.id || "").trim();
-      const scrapeId = (scrape?.id || "").trim();
-      const htmlId = (html?.id || "").trim();
+      // Extract from PDF text: ID/version + title + keywords + abstract + refs + affiliations
+      const pdfAll = state.pdfAllText || "";
+      const pdfFirst = state.pdfTextByPage?.[0] || pdfAll;
 
-      const scrapeVer = (scrape?.version || "").trim();
-      const htmlVer = (html?.version || "").trim();
+      const pdfArxiv = extractArxivFromText(pdfAll);
+      const pdfId = pdfArxiv.id || "";
+      const pdfVer = pdfArxiv.version || "";
 
-      // final doc arxiv id (if present)
-      let finalParsed = null;
-      if (finalRaw && looksLikeElsevierFinalXml(finalRaw)) {
-        finalParsed = parseFinalElsevier(finalRaw);
+      // HTML cite-as second line
+      const htmlId = html?.id || "";
+      const htmlVer = html?.version || "";
+
+      const scrapeId = scrape?.id || "";
+      const scrapeVer = scrape?.version || "";
+
+      // Titles: PDF title is hard to perfectly extract without layout; we approximate:
+      // Use API title as "PDF-side title" fallback if PDF title extraction fails.
+      // If you later add manual tagging, replace this.
+      const pdfTitleApprox = api?.title || ""; // safer fallback
+      const htmlTitle = html?.title || "";
+
+      // Show values in UI
+      pdfIdVal.textContent = pdfId || "—";
+      htmlIdVal.textContent = htmlId || "—";
+      scrapeIdVal.textContent = scrapeId || "—";
+      pdfVerVal.textContent = normalizeVersion(pdfVer) || "—";
+      htmlVerVal.textContent = normalizeVersion(htmlVer) || "—";
+      scrapeVerVal.textContent = normalizeVersion(scrapeVer) || "—";
+
+      pdfTitleVal.textContent = pdfTitleApprox ? pdfTitleApprox : "—";
+      htmlTitleVal.textContent = htmlTitle ? htmlTitle : "—";
+
+      // Decide process/hold
+      const decision = decideProcess({
+        pdfId, pdfVer,
+        htmlId, htmlVer,
+        scrapeId, scrapeVer,
+        pdfTitle: pdfTitleApprox,
+        htmlTitle
+      });
+
+      matchVal.innerHTML = decision.ok ? badge("PROCESS ✅ " + decision.reason, "good") : badge("HOLD ⛔ " + decision.reason, "bad");
+
+      // If HOLD, do not generate XML (per your rule)
+      if (!decision.ok) {
+        outXml.value = "";
+        downloadBtn.disabled = true;
+        titleVal.textContent = "—";
+        absVal.innerHTML = badge("—", "warn");
+        kwVal.innerHTML = badge("—", "warn");
+        authVal.innerHTML = badge("—", "warn");
+        affVal.innerHTML = badge("—", "warn");
+        refVal.innerHTML = badge("—", "warn");
+        return;
       }
 
-      const finalIdGuess = finalParsed?.arxiv ? extractArxivFromText(finalParsed.arxiv).id : "";
-      const finalVerGuess = finalParsed?.arxiv ? extractArxivFromText(finalParsed.arxiv).version : "";
+      // Choose ID + version output
+      const finalId = normalizeId(htmlId || scrapeId || api?.id || pdfId);
+      const finalV = normalizeVersion(htmlVer || scrapeVer || pdfVer);
 
-      const finalId = (apiId || scrapeId || htmlId || finalIdGuess || extractArxivFromText(state.selected.pdfName).id || "").trim();
-      const finalVer = (htmlVer || scrapeVer || finalVerGuess || "").trim();
+      const arxivIdWithVersion = (finalId && finalV) ? `${finalId}${finalV}` : (finalId || "");
 
-      const ids = [apiId, scrapeId, htmlId].filter(Boolean);
-      const idAllSame = ids.length ? ids.every(x => x === ids[0]) : false;
+      // Choose title (your rule)
+      const chosenTitle = chooseTitle(pdfTitleApprox, htmlTitle).trim();
 
-      let verOk = true;
-      if (htmlVer && scrapeVer && htmlVer !== scrapeVer) verOk = false;
-      if (!htmlVer && !scrapeVer && !finalVerGuess) verOk = false;
+      // Keywords: prefer PDF, fallback to HTML
+      const kwPdf = extractKeywordsFromTextBlock(pdfAll);
+      const kwHtml = extractKeywordsFromTextBlock((html?.bodyText || ""));
+      const keywords = (kwPdf.length ? kwPdf : kwHtml);
 
-      const matchOk = (!!finalId) && (idAllSame || !!finalIdGuess) && verOk;
+      // Abstract: prefer API (most stable), else PDF, else HTML
+      const absFromApi = (api?.abstract || "").trim();
+      const absFromPdf = extractAbstractFromPdfText(pdfAll);
+      const absFromHtml = (html?.abstract || "").trim();
+      const abstractText = (absFromApi || absFromPdf || absFromHtml).trim();
 
-      // Title / Abstract
-      const chosenTitle = (html?.title || api?.title || finalParsed?.titletext || "").trim();
-      const absText = (api?.abstract || html?.abstract || "").trim();
+      // Authors: from API (stable)
+      const authors = api?.authors || [];
 
-      // STRICT Keywords:
-      // 1) Final XML keywords
-      // 2) explicit PDF "Keywords:"
-      let keywords = finalParsed?.keywords || [];
-      let kwSource = keywords.length ? "Final XML" : "";
+      // Affiliations: best-effort from PDF first page
+      const affiliations = extractAffiliationsFromFirstPageText(pdfFirst);
 
-      // References:
-      // 1) Final XML bibliography
-      // 2) PDF parse
-      let references = finalParsed?.references || [];
-      let refsSource = references.length ? "Final XML" : "";
+      // References: best-effort from PDF
+      const references = extractReferencesFromPdfText(pdfAll);
 
-      // If we need PDF for fallback keyword/ref
-      let pdfAllText = "";
-      if (!keywords.length || !references.length) {
-        pdfAllText = await extractPdfTextAllPagesCap(80);
-      }
-
-      if (!keywords.length) {
-        const fromPdf = detectKeywordsFromText_STRICT(pdfAllText);
-        if (fromPdf.length) {
-          keywords = fromPdf;
-          kwSource = "PDF Keywords:";
-        }
-      }
-
-      if (!references.length) {
-        const fromPdfRefs = parseReferencesFromPdf(pdfAllText);
-        if (fromPdfRefs.length) {
-          references = fromPdfRefs;
-          refsSource = "PDF References";
-        }
-      }
-
-      // Build output:
-      // If FINAL XML exists -> use it as STRICT TEMPLATE (keep author-groups, affils, ORCID/email, refs structure)
-      let outputXml = "";
-      let authorAffilInfo = "";
-
-      if (finalParsed?.doc) {
-        const doc = finalParsed.doc;
-
-        const arxivIdWithVersion = (finalId && finalVer)
-          ? `${finalId}${finalVer}`
-          : (finalParsed.arxiv || finalId || "");
-
-        replaceArxivInFinalDoc(doc, arxivIdWithVersion);
-
-        if (chosenTitle) replaceTitleInFinalDoc(doc, chosenTitle);
-
-        // keep template abstract markup; only fill if empty
-        maybeReplaceAbstractIfEmpty(doc, absText);
-
-        // if keywords exist (from template or strict pdf), ensure in doc
-        if (keywords.length) replaceKeywordsIfProvided(doc, keywords);
-
-        // bibliography: if template already has it, keep it.
-        // If template missing bibliography but we got references, you can add here later (rare).
-
-        outputXml = prettyXml(serializeXml(doc));
-        authorAffilInfo = `Template author-groups: ${finalParsed.authorGroupsCount || 0}, Refs: ${references.length || 0}`;
-      } else {
-        // Fallback minimal strict skeleton (no guessing affiliations/orcid)
-        const arxivIdWithVersion = (finalId && finalVer) ? `${finalId}${finalVer}` : (finalId || "");
-        const nowIso = new Date().toISOString();
-
-        const kwXml = keywords.length
-          ? `<author-keywords>\n${keywords.map(k => `              <author-keyword>${escapeXml(k)}</author-keyword>`).join("\n")}\n            </author-keywords>\n`
-          : "";
-
-        const authors = api?.authors || [];
-        const authorsXml = authors.map((a, i) => {
-          const given = a.forenames || "";
-          const surname = a.keyname || "";
-          const initials = given
-            .split(/\s+/).filter(Boolean)
-            .map(x => x[0].toUpperCase() + ".")
-            .join("");
-          return `            <author-group seq="${i+1}">
-              <author seq="${i+1}">
-                <ce:initials>${escapeXml(initials || "")}</ce:initials>
-                <ce:surname>${escapeXml(surname)}</ce:surname>
-                <ce:given-name>${escapeXml(given)}</ce:given-name>
-              </author>
-              <!-- affiliation missing in fallback (STRICT: no guessing) -->
-            </author-group>`;
-        }).join("\n");
-
-        const absXml = absText
-          ? `          <abstracts>
-            <abstract original="y" xml:lang="ENG">
-              <ce:para>${escapeXml(absText)}</ce:para>
-            </abstract>
-          </abstracts>\n`
-          : "";
-
-        const refsXml = references.length
-          ? `          <bibliography refcount="${references.length}">
-${references.map((r, idx) => `            <reference seq="${idx+1}">
-              <ref-info/>
-              <ref-fulltext>${escapeXml(r)}</ref-fulltext>
-              <ce:source-text>${escapeXml(r)}</ce:source-text>
-            </reference>`).join("\n")}
-          </bibliography>\n`
-          : `          <bibliography refcount="0"/>\n`;
-
-        outputXml = `<?xml version="1.0" encoding="utf-8"?>
-<units xmlns="http://www.elsevier.com/xml/ani/ani" xmlns:ce="http://www.elsevier.com/xml/ani/common">
-  <unit type="ARTICLE">
-    <unit-info>
-      <unit-id>1</unit-id>
-      <order-id>unknown</order-id>
-      <parcel-id>none</parcel-id>
-      <supplier-id>4</supplier-id>
-      <timestamp>${escapeXml(nowIso)}</timestamp>
-    </unit-info>
-    <unit-content>
-      <bibrecord>
-        <item-info>
-          <status state="new"/>
-          <itemidlist>
-            <itemid idtype="ARXIV">${escapeXml(arxivIdWithVersion)}</itemid>
-          </itemidlist>
-        </item-info>
-        <head>
-          <citation-info>
-            <citation-type code="ar"/>
-            <citation-language xml:lang="ENG"/>
-            <abstract-language xml:lang="ENG"/>
-${kwXml}          </citation-info>
-          <citation-title>
-            <titletext xml:lang="ENG" original="y">${escapeXml(chosenTitle || "")}</titletext>
-          </citation-title>
-${authorsXml || "          <!-- No authors parsed -->"}
-${absXml}          <source srcid="???"/>
-        </head>
-        <tail>
-${refsXml}        </tail>
-      </bibrecord>
-    </unit-content>
-  </unit>
-</units>`;
-
-        outputXml = prettyXml(outputXml);
-        authorAffilInfo = `Fallback authors: ${authors.length}, Refs: ${references.length || 0}`;
-      }
-
-      // UI updates
-      arxivIdVal.textContent = finalId || "—";
-      versionVal.textContent = finalVer || "—";
-      matchVal.innerHTML = matchOk ? badge("OK – IDs & versions match", "good") : badge("HOLD – Version/ID mismatch", "bad");
+      // UI status flags
       titleVal.textContent = chosenTitle || "—";
-      absVal.innerHTML = (finalParsed?.doc || absText) ? badge("Yes", "good") : badge("No", "warn");
+      absVal.innerHTML = abstractText ? badge("Yes", "good") : badge("No", "warn");
+      kwVal.innerHTML = keywords.length ? badge(`${keywords.length} keyword(s)`, "good") : badge("None detected", "warn");
+      authVal.innerHTML = authors.length ? badge(`API authors: ${authors.length}`, "good") : badge("No authors parsed", "warn");
+      affVal.innerHTML = affiliations.length ? badge(`${affiliations.length} affiliation line(s)`, "good") : badge("None detected", "warn");
+      refVal.innerHTML = references.length ? badge(`${references.length} reference(s)`, "good") : badge("None detected", "warn");
 
-      const kwShow = keywords.length ? `${keywords.length} keyword(s) [${kwSource || "none"}]` : "None (STRICT)";
-      kwVal.innerHTML = keywords.length ? badge(kwShow, "good") : badge(kwShow, "warn");
+      // If ZIP already contains final Elsevier XML, we can optionally output it as-is.
+      // But your request is to GENERATE. We'll still generate.
+      const xml = buildElsevierXmlStrict({
+        arxivIdWithVersion,
+        chosenTitle,
+        abstractText,
+        keywords,
+        authors,
+        affiliations,
+        references
+      });
 
-      const finalUsed = finalParsed?.doc ? "Final XML template USED" : "No final template (fallback)";
-      const refsShow = references.length ? `Refs: ${references.length} [${refsSource || "none"}]` : "Refs: 0";
-      authVal.innerHTML = badge(`${finalUsed} • ${authorAffilInfo} • ${refsShow}`, finalParsed?.doc ? "good" : "warn");
-
-      outXml.value = outputXml;
-      downloadBtn.disabled = !outputXml;
+      outXml.value = xml;
+      downloadBtn.disabled = !xml;
 
     } catch (e) {
       console.error(e);
