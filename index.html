@@ -195,7 +195,6 @@
 
 <script>
   // --- PDF.js worker ---
-  // MUST match the same major/minor as pdf.min.js above (3.11.174)
   pdfjsLib.GlobalWorkerOptions.workerSrc =
     "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
@@ -258,6 +257,7 @@
   // Helpers
   // ----------------------------
   const lower = s => (s || "").toLowerCase();
+  const norm = s => String(s ?? "").replace(/\s+/g," ").trim();
 
   function escapeHtml(s) {
     return String(s ?? "").replace(/[&<>"']/g, c => ({
@@ -281,20 +281,34 @@
     return doc.body.innerHTML || "";
   }
 
-  const ARXIV_ID_RE = /(\d{4}\.\d{4,5})(v\d+)?/i;
-
+  // ---- arXiv detection ----
   function extractArxivFromText(text) {
     if (!text) return { id:null, version:null };
-    const m1 = /arxiv:\s*(\d{4}\.\d{4,5})(v\d+)?/i.exec(text);
-    if (m1) return { id: m1[1], version: (m1[2]||null) };
-    const m2 = /oai:arxiv\.org:(\d{4}\.\d{4,5})/i.exec(text);
+    const m1 = /arxiv:\s*(\d{4}\.\d{4,5})v(\d+)/i.exec(text);
+    if (m1) return { id: m1[1], version: "v"+m1[2] };
+    const m2 = /arxiv:\s*(\d{4}\.\d{4,5})/i.exec(text);
     if (m2) return { id: m2[1], version: null };
-    const m3 = ARXIV_ID_RE.exec(text);
-    if (m3) return { id: m3[1], version: (m3[2]||null) };
+    const m3 = /oai:arxiv\.org:(\d{4}\.\d{4,5})/i.exec(text);
+    if (m3) return { id: m3[1], version: null };
     return { id:null, version:null };
   }
 
-  // --- XML helpers ---
+  // Extract id/version from Scrape XML: <item id="2511.16743"> and <version number="[v1]"/>
+  function parseScrapeXml(xmlStr) {
+    const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
+    const item = doc.getElementsByTagName("item")[0];
+    const id = item?.getAttribute("id") || "";
+    const v = doc.getElementsByTagName("version")[0];
+    let version = "";
+    if (v) {
+      const number = v.getAttribute("number") || ""; // like [v1]
+      const m = /\[v(\d+)\]/i.exec(number);
+      if (m) version = "v" + m[1];
+    }
+    return { id, version };
+  }
+
+  // API XML (OAI) – id in <id>, but version not reliable
   function xmlText(node, tagName) {
     const el = node.getElementsByTagName(tagName)[0];
     return el ? (el.textContent || "").trim() : "";
@@ -312,61 +326,194 @@
     return { id, title, abstract, authors };
   }
 
-  function parseScrapeXml(xmlStr) {
-    const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
-    const item = doc.getElementsByTagName("item")[0];
-    const id = item?.getAttribute("id") || "";
-    const v = doc.getElementsByTagName("version")[0];
-    let version = "";
-    if (v) {
-      const number = v.getAttribute("number") || ""; // like [v1]
-      const m = /\[v(\d+)\]/i.exec(number);
-      if (m) version = "v" + m[1];
-    }
-    return { id, version };
-  }
-
+  // HTML landing parse (title/abstract/id/version/keywords)
   function parseHtmlLanding(htmlStr) {
     const doc = new DOMParser().parseFromString(htmlStr, "text/html");
     const bodyText = doc.body?.textContent || "";
     const { id, version } = extractArxivFromText(bodyText);
 
+    // Title: try citation meta first, else "Title:" line, else doc.title
     let title = (doc.querySelector('meta[name="citation_title"]')?.getAttribute("content") || "").trim();
     if (!title) {
-      const titleLabel = [...doc.querySelectorAll("h1,h2,b,strong,td,div,span,p")]
-        .find(el => /title\s*:/i.test(el.textContent));
-      if (titleLabel) {
-        const m = /title\s*:\s*(.+)$/i.exec(titleLabel.textContent);
+      // find actual arXiv "Title:" label in the content
+      const allText = bodyText.split("\n").map(x=>x.trim()).filter(Boolean);
+      const tLine = allText.find(x => /^title\s*:/i.test(x));
+      if (tLine) {
+        const m = /^title\s*:\s*(.+)$/i.exec(tLine);
         if (m) title = m[1].trim();
       }
     }
     if (!title) title = (doc.title || "").trim();
 
-    const fullText = bodyText.replace(/\s+/g," ").trim();
+    // Abstract: prefer true "Abstract:" line (not search UI)
+    const lines = bodyText.split("\n").map(x=>x.trim()).filter(Boolean);
     let abstract = "";
-    const absHeads = ["abstract","summary","synopsis","summary and conclusions"];
+    const absHeads = [
+      "abstract",
+      "summary",
+      "synopsis",
+      "summary and conclusions",
+      "conclusions and summary",
+      "executive summary"
+    ];
+
+    // find a line starting with one of the headings
     for (const h of absHeads) {
-      const idx = fullText.toLowerCase().indexOf(h);
-      if (idx !== -1) {
-        const slice = fullText.slice(idx);
-        const stop = slice.search(/\b(comments|subjects|cite as|submission history|full-text links)\b/i);
-        abstract = (stop > 0 ? slice.slice(0, stop) : slice).replace(new RegExp(`\\b${h}\\b\\s*:?\\s*`,"i"), "").trim();
+      const line = lines.find(x => new RegExp(`^${h}\\s*:`,"i").test(x));
+      if (line) {
+        abstract = line.replace(new RegExp(`^${h}\\s*:\\s*`,"i"), "").trim();
         break;
       }
     }
 
-    return { id, version, title, abstract, sanitizedHtml: stripScripts(htmlStr) };
+    // fallback: look for "Abstract:" in the raw text and cut before known sections
+    if (!abstract) {
+      const raw = bodyText.replace(/\s+/g," ").trim();
+      const m = /(?:^|\s)(abstract|summary|synopsis|summary and conclusions)\s*:\s*/i.exec(raw);
+      if (m) {
+        const start = m.index + m[0].length;
+        const rest = raw.slice(start);
+        const stopAt = rest.search(/\b(comments|subjects|cite as|submission history|full-text links|references & citations)\b/i);
+        abstract = (stopAt > 0 ? rest.slice(0, stopAt) : rest).trim();
+      }
+    }
+
+    // Keywords: ONLY accept if a real "Keywords:" section exists in main content
+    const keywords = detectKeywordsFromHtmlDoc(doc);
+
+    return { id, version, title, abstract, keywords, sanitizedHtml: stripScripts(htmlStr) };
   }
 
-  function detectKeywordsFromText(text) {
-    if (!text) return [];
-    const m = /keywords?\s*[:\-]\s*(.+)/i.exec(text);
-    if (!m) return [];
-    const raw = m[1].trim();
-    const stop = raw.split(/\b(abstract|introduction)\b/i)[0].trim();
-    return stop.split(/[;•,\u2022|·\u00b7\/]+/).map(s => s.trim()).filter(Boolean);
+  function detectKeywordsFromHtmlDoc(doc){
+    // Avoid the search bar "All fields / Title / Author / Abstract / Comments / Keyword..."
+    // We'll only accept a line that STARTS with "Keywords:" or "Index terms:"
+    const text = doc.body?.textContent || "";
+    const lines = text.split("\n").map(x=>x.trim()).filter(Boolean);
+
+    // try exact heading lines
+    let raw = "";
+    const kwLine = lines.find(x => /^keywords?\s*:/i.test(x));
+    const idxLine = lines.find(x => /^(index terms|index term)\s*:/i.test(x));
+
+    if (kwLine) raw = kwLine.replace(/^keywords?\s*:\s*/i,"").trim();
+    else if (idxLine) raw = idxLine.replace(/^(index terms|index term)\s*:\s*/i,"").trim();
+    else return [];
+
+    // stop at obvious next section words if the line accidentally contains them
+    raw = raw.split(/\b(abstract|introduction|references|authors?|submission history)\b/i)[0].trim();
+
+    // split by real separators (NOT spaces)
+    const parts = raw.split(/[;•,\u2022|·\u00b7\/]+/).map(s=>s.trim()).filter(Boolean);
+
+    // prevent false positives: if only 1 tiny token like "GO" or "Help" etc, discard
+    const badTokens = new Set(["go","help","advanced search","search","login"]);
+    const cleaned = parts
+      .filter(p => p.length >= 3)
+      .filter(p => !badTokens.has(p.toLowerCase()));
+
+    // prevent super long single blob (means we parsed wrong)
+    if (cleaned.length === 1 && cleaned[0].length > 120) return [];
+    return cleaned;
   }
 
+  // ---- PDF first page text ----
+  async function getPdfPageText(pdfDoc, pageNum){
+    if (!pdfDoc) return "";
+    const page = await pdfDoc.getPage(pageNum);
+    const content = await page.getTextContent();
+    const parts = content.items.map(it => it.str);
+    return parts.join("\n");
+  }
+
+  // ----------------------------
+  // Gate: ID + Version (your rules)
+  // ----------------------------
+  function gateIdVersion({pdf, html, scrape, api}){
+    // ID rule: PDF/HTML/Scrape/API should all agree on the number (API used for number only).
+    const idSet = new Set([pdf.id, html.id, scrape.id, api.id].filter(Boolean));
+    const okId = idSet.size === 1;
+
+    // Version rule:
+    // - If PDF HAS version: HTML + Scrape (if present) must match PDF version.
+    // - If PDF has NO version: HTML and Scrape versions MUST exist and match.
+    const pdfHasV = !!pdf.version;
+    const htmlHasV = !!html.version;
+    const scrapeHasV = !!scrape.version;
+
+    let okVersion = true;
+    let reason = "";
+
+    if (pdfHasV) {
+      const vers = [pdf.version, html.version, scrape.version].filter(Boolean);
+      okVersion = vers.length >= 2 && vers.every(v => v === pdf.version);
+      if (!okVersion) {
+        reason = `Version mismatch (PDF=${pdf.version}, HTML=${html.version||"-"}, Scrape=${scrape.version||"-"})`;
+      }
+    } else {
+      if (!htmlHasV || !scrapeHasV) {
+        okVersion = false;
+        reason = "PDF has no version; require HTML + Scrape versions to exist and match.";
+      } else if (html.version !== scrape.version) {
+        okVersion = false;
+        reason = `Version mismatch (HTML=${html.version}, Scrape=${scrape.version})`;
+      }
+    }
+
+    if (!okId) {
+      reason = `ID mismatch: ${[pdf.id, html.id, scrape.id, api.id].filter(Boolean).join(" vs ")}`;
+    }
+
+    return { ok: okId && okVersion, okId, okVersion, reason };
+  }
+
+  // ----------------------------
+  // Title decision (your rule)
+  // ----------------------------
+  function cleanTitleBasic(t){
+    t = norm(t);
+    // remove "Preprint" and trailing asterisk (per your note)
+    t = t.replace(/\bpreprint\b/i,"").trim();
+    t = t.replace(/\*+$/,"").trim();
+    return t;
+  }
+
+  function titlesAreSameish(a,b){
+    // If any real mismatch (including hyphen differences) → treat as mismatch.
+    // So we only treat as same when EXACT after collapsing spaces.
+    const A = cleanTitleBasic(a);
+    const B = cleanTitleBasic(b);
+    return A === B;
+  }
+
+  function chooseTitle(pdfTitle, htmlTitle){
+    const p = cleanTitleBasic(pdfTitle || "");
+    const h = cleanTitleBasic(htmlTitle || "");
+
+    if (!p && !h) return "";
+    if (!p) return h;
+    if (!h) return p;
+
+    if (!titlesAreSameish(p,h)) {
+      // YOUR RULE: if any difference in content (even hyphen) → choose HTML
+      return h;
+    }
+    // Same => choose more complete
+    return (p.length >= h.length) ? p : h;
+  }
+
+  // ----------------------------
+  // Abstract decision (synonyms)
+  // ----------------------------
+  function chooseAbstract(apiAbs, htmlAbs){
+    const a = norm(apiAbs || "");
+    const h = norm(htmlAbs || "");
+    // prefer HTML abstract for arXiv landing reliability; fallback to API
+    return h || a;
+  }
+
+  // ----------------------------
+  // XML helpers
+  // ----------------------------
   function escapeXml(s){
     return String(s||"").replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c]));
   }
@@ -455,17 +602,15 @@ ${absXml}          <source srcid="???"/>
 
     for (const n of xmlNames) {
       const txt = await zip.file(n).async("string");
-      const head = txt.slice(0, 6000).toLowerCase();
+      const head = txt.slice(0, 7000).toLowerCase();
 
-      // API/OAI tends to contain <record> and oai:arXiv.org:NNNN.NNNNN and <arXiv>
       const looksApi =
         head.includes("<record") ||
         head.includes("oai:arxiv.org:") ||
         head.includes("<arxiv");
 
-      // Scrape XML in your earlier rule usually has <item id="..."> and <version number="[v1]">
       const looksScrape =
-        head.includes("<item") && head.includes("version") && head.includes("[v");
+        head.includes("<arxiv") && head.includes("<item") && head.includes("version") && head.includes("[v");
 
       if (!apiName && looksApi) apiName = n;
       if (!scrapeName && looksScrape) scrapeName = n;
@@ -477,7 +622,7 @@ ${absXml}          <source srcid="???"/>
       if (apiByName) apiName = apiByName;
 
       const scrapeByName = xmlNames.find(n => n.includes(guessedId) && n !== apiName);
-      if (scrapeByName && !apiName) scrapeName = scrapeByName;
+      if (scrapeByName && !scrapeName) scrapeName = scrapeByName;
     }
 
     const htmlName = (guessedId
@@ -668,7 +813,7 @@ ${absXml}          <source srcid="???"/>
   });
 
   // ----------------------------
-  // Run Extraction (ACTUALLY RUNS)
+  // Run Extraction (GATED)
   // ----------------------------
   runBtn.addEventListener("click", async () => {
     try {
@@ -678,40 +823,56 @@ ${absXml}          <source srcid="???"/>
       const scrapeRaw = scrapeText.value || "";
       const htmlRaw = state.selected.htmlName ? await state.zip.file(state.selected.htmlName).async("string") : "";
 
-      const api = apiRaw ? parseApiXml(apiRaw) : null;
-      const scrape = scrapeRaw ? parseScrapeXml(scrapeRaw) : null;
-      const html = htmlRaw ? parseHtmlLanding(htmlRaw) : null;
+      const api = apiRaw ? parseApiXml(apiRaw) : { id:"", title:"", abstract:"", authors:[] };
+      const scrape = scrapeRaw ? parseScrapeXml(scrapeRaw) : { id:"", version:"" };
+      const html = htmlRaw ? parseHtmlLanding(htmlRaw) : { id:"", version:"", title:"", abstract:"", keywords:[] };
 
-      const apiId = api?.id || "";
-      const scrapeId = scrape?.id || "";
-      const htmlId = html?.id || "";
+      // PDF arXiv from FIRST PAGE TEXT
+      const pdfFirstText = state.pdfDoc ? await getPdfPageText(state.pdfDoc, 1) : "";
+      const pdfArx = extractArxivFromText(pdfFirstText);
 
-      const scrapeVer = scrape?.version || "";
-      const htmlVer = html?.version || "";
+      // Normalize inputs for gate
+      const gate = gateIdVersion({
+        pdf: { id: pdfArx.id || null, version: pdfArx.version || null },
+        html: { id: html.id || null, version: html.version || null },
+        scrape: { id: scrape.id || null, version: scrape.version || null },
+        api: { id: api.id || null, version: null }
+      });
 
-      const finalId = (apiId || scrapeId || htmlId || extractArxivFromText(state.selected.pdfName).id || "").trim();
-      const finalVer = (htmlVer || scrapeVer || "").trim();
-
-      const ids = [apiId, scrapeId, htmlId].filter(Boolean);
-      const idAllSame = ids.length ? ids.every(x => x === ids[0]) : false;
-
-      let verOk = true;
-      if (htmlVer && scrapeVer && htmlVer !== scrapeVer) verOk = false;
-      if (!htmlVer && !scrapeVer) verOk = false;
-
-      const matchOk = (!!finalId) && idAllSame && verOk;
-
-      const chosenTitle = (html?.title || api?.title || "").trim();
-      const absText = (api?.abstract || html?.abstract || "").trim();
-      const kw = detectKeywordsFromText(htmlRaw);
-      const authors = api?.authors || [];
+      // Final chosen ID/version for display + XML
+      const finalId = (pdfArx.id || html.id || scrape.id || api.id || extractArxivFromText(state.selected.pdfName).id || "").trim();
+      const finalVer = (pdfArx.version || html.version || scrape.version || "").trim();
 
       arxivIdVal.textContent = finalId || "—";
       versionVal.textContent = finalVer || "—";
-      matchVal.innerHTML = matchOk ? badge("OK – IDs & versions match", "good") : badge("HOLD – Version/ID mismatch", "bad");
+
+      if (!gate.ok) {
+        matchVal.innerHTML = badge(`HOLD – ${gate.reason || "Version/ID mismatch"}`, "bad");
+        titleVal.textContent = "—";
+        absVal.innerHTML = badge("—", "warn");
+        kwVal.innerHTML = badge("—", "warn");
+        authVal.innerHTML = badge("—", "warn");
+        outXml.value = "";
+        downloadBtn.disabled = true;
+        return; // STOP PROCESSING
+      }
+
+      matchVal.innerHTML = badge("OK – IDs & versions match", "good");
+
+      // Title choice: PDF vs HTML (API as fallback)
+      const chosenTitle = chooseTitle(api.title, html.title) || cleanTitleBasic(api.title) || cleanTitleBasic(html.title);
       titleVal.textContent = chosenTitle || "—";
+
+      // Abstract: HTML synonyms already handled; API fallback
+      const absText = chooseAbstract(api.abstract, html.abstract);
       absVal.innerHTML = absText ? badge("Yes", "good") : badge("No", "warn");
+
+      // Keywords: strict (avoid false positives)
+      const kw = Array.isArray(html.keywords) ? html.keywords : [];
       kwVal.innerHTML = kw.length ? badge(`${kw.length} keyword(s)`, "good") : badge("None detected", "warn");
+
+      // Authors: currently API only (PDF-vs-API reconciliation comes next module)
+      const authors = api.authors || [];
       authVal.innerHTML = authors.length ? badge(`API authors: ${authors.length}`, "good") : badge("No authors parsed", "warn");
 
       const arxivIdWithVersion = (finalId && finalVer) ? `${finalId}${finalVer}` : (finalId || "");
