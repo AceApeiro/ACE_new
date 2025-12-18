@@ -392,16 +392,34 @@
     const doc = new DOMParser().parseFromString(htmlStr, "text/html");
     const bodyText = doc.body?.textContent || "";
 
-    // Cite-as second line logic (your rule)
-    // We search for "Cite as:" then take next ~2 lines of nearby text and extract arxiv id+version.
-    let citeChunk = "";
-    {
-      const full = bodyText.replace(/\r/g,"\n");
-      const idx = full.toLowerCase().indexOf("cite as");
-      if (idx !== -1) citeChunk = full.slice(idx, idx + 500);
+    // arXiv id/version: prefer "Cite as" second line (ACE rule)
+let id = "";
+let version = "";
+{
+  const full = bodyText.replace(/\r/g, "\n");
+  const idx = full.toLowerCase().indexOf("cite as");
+  if (idx !== -1) {
+    const window = full.slice(idx, idx + 1500);
+    const lines = window.split("\n").map(l => l.trim()).filter(Boolean);
+    let arxivLine = "";
+    for (let li = 0; li < lines.length; li++) {
+      if (lines[li].toLowerCase().includes("cite as")) {
+        for (let k = li + 1; k < Math.min(li + 6, lines.length); k++) {
+          if (/arxiv\s*:/i.test(lines[k]) || /\b\d{4}\.\d{4,5}(v\d+)?\b/.test(lines[k])) { arxivLine = lines[k]; break; }
+        }
+        if (arxivLine) break;
+      }
     }
+    if (!arxivLine) arxivLine = lines.find(l => /arxiv\s*:/i.test(l) || /\b\d{4}\.\d{4,5}(v\d+)?\b/.test(l)) || "";
+    const tmp = extractArxivFromText(arxivLine || window);
+    id = tmp.id; version = tmp.version;
+  }
+}
+if (!id) {
+  const tmp = extractArxivFromText(bodyText);
+  id = tmp.id; version = tmp.version;
+}
 
-    let { id, version } = extractArxivFromText(citeChunk);
     if (!id) ({ id, version } = extractArxivFromText(bodyText));
 
     // Title from meta or page title
@@ -445,6 +463,17 @@
   function titlesExactlySame(pdfTitle, htmlTitle){
     return cleanTitleForCompare(pdfTitle) === cleanTitleForCompare(htmlTitle);
   }
+
+function strictTitleKey(s){
+  // Strict key for title equality checks (PDF vs HTML).
+  // Keep punctuation/hyphens, but ignore common formatting markers like $...$ used for styling in HTML.
+  return cleanTitleForCompare(String(s||"")
+    .replace(/\$/g,"")
+    .replace(/<[^>]*>/g,"")
+    .replace(/\s+/g," ")
+    .trim());
+}
+
 
   function chooseTitle(pdfTitle, htmlTitle){
     const p = (pdfTitle||"").trim();
@@ -813,6 +842,11 @@
         for (const n of nums){
           if (globalAffByNum.has(n)) affs.push(globalAffByNum.get(n));
         }
+if (affs.length === 0) {
+  // Fallback: include all known affiliation lines (better than dumping whole page text)
+  for (const v of globalAffByNum.values()) affs.push(v);
+}
+
         if (affs.length) a.affiliations = affs;
       }
       // if still no affiliations, keep empty (don’t inject massive blobs)
@@ -1241,46 +1275,49 @@ ${absXml}          <source srcid="???"/>
       let holdReason = "";
       let okToProcess = false;
 
-      if (pdfHasId) {
-        // require all three match ID+version
-        // If PDF has no version, we still require HTML and scrape versions match; PDF version treated missing → HOLD (your earlier note)
-        if (!pdfHasVer) {
-          holdReason = "PDF has ID but no version → HOLD (need version consistency).";
-          okToProcess = false;
-        } else {
-          const pdf = { id: pdfIdVer.id, version: pdfIdVer.version };
-          const htmlOk = isFullIdVer(htmlIdVer);
-          const scrOk  = isFullIdVer(scrIdVer);
+      // --- ID+Version gating logic (ACE rule)
+// 1) If PDF has arXiv ID:
+//    - If PDF has version: PDF/HTML/Scrape must match BOTH id and version.
+//    - If PDF has NO version: PDF id must match HTML/Scrape id, and HTML+Scrape versions must match each other.
+// 2) If PDF has NO arXiv ID:
+//    - PDF and HTML titles must match (strict).
+//    - Then HTML+Scrape id+version must match.
+if (pdfHasId) {
+  const pdfId = normId(pdfIdVer.id);
+  const pdfVer = normVer(pdfIdVer.version);
+  const htmlId = normId(htmlIdVer.id);
+  const htmlVer = normVer(htmlIdVer.version);
+  const scId = normId(scrapeIdVer.id);
+  const scVer = normVer(scrapeIdVer.version);
 
-          if (!htmlOk || !scrOk) {
-            holdReason = "Missing ID/version on HTML or Scrape.";
-            okToProcess = false;
-          } else if (idVerEqual(pdf, htmlIdVer) && idVerEqual(pdf, scrIdVer) && idVerEqual(htmlIdVer, scrIdVer)) {
-            okToProcess = true;
-          } else {
-            holdReason = "ID/version mismatch across PDF/HTML/Scrape.";
-            okToProcess = false;
-          }
-        }
-      } else {
-        // Case 2: PDF HAS NO ID → titles must match strictly, then HTML+Scrape must match ID+version
-        if (!titleSame) {
-          holdReason = "PDF has no ID → Title mismatch (strict) → HOLD.";
-          okToProcess = false;
-        } else {
-          const htmlOk = isFullIdVer(htmlIdVer);
-          const scrOk  = isFullIdVer(scrIdVer);
-          if (!htmlOk || !scrOk) {
-            holdReason = "PDF has no ID → Title matches, but missing HTML/Scrape ID+version.";
-            okToProcess = false;
-          } else if (idVerEqual(htmlIdVer, scrIdVer)) {
-            okToProcess = true;
-          } else {
-            holdReason = "PDF has no ID → Title matches, but HTML vs Scrape ID/version mismatch.";
-            okToProcess = false;
-          }
-        }
-      }
+  if (pdfVer) {
+    if (!(pdfId && htmlId && scId && pdfId === htmlId && pdfId === scId && htmlVer && scVer && pdfVer === htmlVer && pdfVer === scVer)) {
+      holdReason = `Version mismatched: PDF=${pdfId}${pdfVer||""}, HTML=${htmlId}${htmlVer||""}, SCRAPE=${scId}${scVer||""}`;
+      continue;
+    }
+  } else {
+    if (!(pdfId && htmlId && scId && pdfId === htmlId && pdfId === scId && htmlVer && scVer && htmlVer === scVer)) {
+      holdReason = `Version mismatched (PDF has no version): PDF=${pdfId}, HTML=${htmlId}${htmlVer||""}, SCRAPE=${scId}${scVer||""}`;
+      continue;
+    }
+  }
+} else {
+  const pdfTitleNormStrict = strictTitleKey(pdfTitle || "");
+  const htmlTitleNormStrict = strictTitleKey(htmlTitle || "");
+  if (!(pdfTitleNormStrict && htmlTitleNormStrict && pdfTitleNormStrict === htmlTitleNormStrict)) {
+    holdReason = "PDF has no arXiv ID and title mismatch with HTML → held";
+    continue;
+  }
+
+  const htmlId = normId(htmlIdVer.id);
+  const htmlVer = normVer(htmlIdVer.version);
+  const scId = normId(scrapeIdVer.id);
+  const scVer = normVer(scrapeIdVer.version);
+  if (!(htmlId && scId && htmlId === scId && htmlVer && scVer && htmlVer === scVer)) {
+    holdReason = `Version mismatched (PDF no id): HTML=${htmlId}${htmlVer||""}, SCRAPE=${scId}${scVer||""}`;
+    continue;
+  }
+}
 
       matchVal.innerHTML = okToProcess
         ? badge("OK – PROCESS", "good")
@@ -1364,7 +1401,7 @@ ${absXml}          <source srcid="???"/>
     for (let p=1;p<=total;p++){
       const t = await getPdfPageText(p);
       out += "\n" + t;
-      if (out.length > 350000) break; // cap
+      if (out.length > 2000000) break; // cap raised to keep References/affiliations
     }
     return out;
   }
