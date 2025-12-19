@@ -324,7 +324,6 @@
 
     const low = bodyText.toLowerCase();
 
-    // 2) Cite-as area (ANY LINE, not “second line”)
     const citeIdx = low.indexOf("cite as");
     const citeWindow = citeIdx >= 0 ? bodyText.slice(citeIdx, citeIdx + 1800) : bodyText.slice(0, 2400);
 
