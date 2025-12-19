@@ -341,7 +341,8 @@
     const title = xmlText(doc, "title");
     const abstract = xmlText(doc, "abstract");
 
-    const authors = [...doc.getElementsByTagName("author")].map(a => ({
+    const authors = [...doc.getElementsByTagName("author")].map((a, idx) => ({
+      seq: idx + 1,
       keyname: xmlText(a, "keyname"),
       forenames: xmlText(a, "forenames"),
       orcid: null,
@@ -919,43 +920,97 @@
       ? `<author-keywords>\n${keywords.map(k => `              <author-keyword>${escapeXml(k)}</author-keyword>`).join("\n")}\n            </author-keywords>\n`
       : "";
 
-    const authorGroupsXml = (authors || []).map((a, i) => {
-      const given = (a.forenames || "").trim();
-      const surname = (a.keyname || "").trim();
+    // ---- AUTHOR GROUPS (Elsevier style) ----
+    // Grouping rule:
+    // - Create 1 <author-group> per UNIQUE affiliation string.
+    // - Put ALL authors that belong to that affiliation inside that group.
+    // - If an author has multiple affiliations, they appear in multiple groups (same author seq repeated).
+    // - Authors with no affiliations go into one final group with no <affiliation>.
+    function computeInitials(given){
+      const g = (given || "").trim();
+      if (!g) return "";
+      const parts = g.split(/\s+/).filter(Boolean);
+      return parts.map(p => {
+        // keep already-initial-like tokens
+        if (/^[A-Z]\.?$/i.test(p)) return (p.replace(".","").toUpperCase() + ".");
+        if (/^[A-Z]\.[A-Z]\.$/i.test(p)) return p.toUpperCase();
+        return p[0] ? (p[0].toUpperCase() + ".") : "";
+      }).join("");
+    }
 
-      // initials: preserve dots (PDF/API style). If given already has initials like "M. O." keep them.
-      // We'll compute from given words when needed.
-      let initials = "";
-      if (given){
-        const parts = given.split(/\s+/).filter(Boolean);
-        initials = parts.map(p => {
-          if (/^[A-Z]\.?$/i.test(p)) return (p.replace(".","").toUpperCase() + ".");
-          if (/^[A-Z]\.[A-Z]\.$/i.test(p)) return p.toUpperCase(); // "M.O."
-          return (p[0] ? (p[0].toUpperCase() + ".") : "");
-        }).join("");
+    const affMap = new Map(); // affText -> Map(seq -> authorObj)
+    const noAff = new Map();  // seq -> authorObj
+
+    (authors || []).forEach((a, idx) => {
+      const seq = Number(a.seq || (idx + 1));
+      const authorObj = { ...a, seq };
+
+      const affs = (a.affiliations || []).map(x => (x || "").trim()).filter(Boolean);
+
+      if (!affs.length){
+        noAff.set(seq, authorObj);
+        return;
       }
 
-      const emailXml = a.email ? `\n              <ce:e-address>${escapeXml(a.email)}</ce:e-address>` : "";
-      // NOTE: Your example uses author orcid="" attribute; we keep ce:orcid only if you want later.
-      // Keeping current approach: omit if none.
-      const orcidXml = a.orcid ? `\n              <ce:orcid>${escapeXml(a.orcid)}</ce:orcid>` : "";
+      for (const aff of affs){
+        if (!affMap.has(aff)) affMap.set(aff, new Map());
+        affMap.get(aff).set(seq, authorObj);
+      }
+    });
 
-      const affs = (a.affiliations || []).slice(0, 10);
-      const affXml = affs.length
-        ? affs.map(src => `            <affiliation>
-              <!-- telemetry: {"confidence": 0.35} -->
-              <ce:source-text>${escapeXml(src)}</ce:source-text>
-            </affiliation>`).join("\n")
-        : ``; // IMPORTANT: if none, do NOT create empty tags per your rule
+    // Build groups in insertion order of affiliations as discovered.
+    const groups = [];
 
-      return `          <author-group seq="${i+1}">
-            <author seq="${i+1}">
+    for (const [affText, seqToAuthor] of affMap.entries()){
+      const list = [...seqToAuthor.values()].sort((x,y) => (x.seq||0) - (y.seq||0));
+
+      const authorsXml = list.map(a => {
+        const given = (a.forenames || "").trim();
+        const surname = (a.keyname || "").trim();
+        const initials = computeInitials(given);
+
+        const emailXml = a.email ? `\n              <ce:e-address>${escapeXml(a.email)}</ce:e-address>` : "";
+        const orcidXml = a.orcid ? `\n              <ce:orcid>${escapeXml(a.orcid)}</ce:orcid>` : "";
+
+        return `            <author seq="${a.seq}">
               <ce:initials>${escapeXml(initials || "")}</ce:initials>
               <ce:surname>${escapeXml(surname)}</ce:surname>
               <ce:given-name>${escapeXml(given)}</ce:given-name>${emailXml}${orcidXml}
-            </author>
-${affXml}
-          </author-group>`;
+            </author>`;
+      }).join("\n");
+
+      const affXml = `            <affiliation>
+              <!-- telemetry: {"confidence": 0.35} -->
+              <ce:source-text>${escapeXml(affText)}</ce:source-text>
+            </affiliation>`;
+
+      groups.push({ authorsXml, affXml });
+    }
+
+    // Optional: one group for authors with no affiliations (NO empty affiliation tags)
+    if (noAff.size){
+      const list = [...noAff.values()].sort((x,y) => (x.seq||0) - (y.seq||0));
+      const authorsXml = list.map(a => {
+        const given = (a.forenames || "").trim();
+        const surname = (a.keyname || "").trim();
+        const initials = computeInitials(given);
+
+        const emailXml = a.email ? `\n              <ce:e-address>${escapeXml(a.email)}</ce:e-address>` : "";
+        const orcidXml = a.orcid ? `\n              <ce:orcid>${escapeXml(a.orcid)}</ce:orcid>` : "";
+
+        return `            <author seq="${a.seq}">
+              <ce:initials>${escapeXml(initials || "")}</ce:initials>
+              <ce:surname>${escapeXml(surname)}</ce:surname>
+              <ce:given-name>${escapeXml(given)}</ce:given-name>${emailXml}${orcidXml}
+            </author>`;
+      }).join("\n");
+      groups.push({ authorsXml, affXml: "" });
+    }
+
+    const authorGroupsXml = groups.map((g, gi) => {
+      return `          <author-group seq="${gi+1}">
+${g.authorsXml}
+${g.affXml ? (g.affXml + "\n") : ""}          </author-group>`;
     }).join("\n");
 
     const absXml = abstractText
@@ -1015,7 +1070,6 @@ ${absXml}          <source srcid="???"/>
   </unit>
 </units>`;
   }
-
   async function detectSupportDocsByContent(zip, guessedId) {
     const names = Object.keys(zip.files).filter(n => !zip.files[n].dir);
 
