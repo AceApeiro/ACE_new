@@ -290,109 +290,58 @@
   function normId(id){ return (id||"").trim(); }
   function normVer(v){ return (v||"").trim(); }
 
+  function extractArxivFromText(text) {
+    if (!text) return { id:null, version:null };
+    const m1 = /arxiv:\s*(\d{4}\.\d{4,5})(v\d+)?/i.exec(text);
+    if (m1) return { id: m1[1], version: (m1[2]||null) };
+
+    const m2 = /oai:arxiv\.org:(\d{4}\.\d{4,5})/i.exec(text);
+    if (m2) return { id: m2[1], version: null };
+
+    const m3 = ARXIV_ID_RE.exec(text);
+    if (m3) return { id: m3[1], version: (m3[2]||null) };
+
+    return { id:null, version:null };
+  }
+
+  function xmlText(node, tagName) {
+    const el = node.getElementsByTagName(tagName)[0];
+    return el ? (el.textContent || "").trim() : "";
+  }
+
+  // HTML cite-as: prefer second line "(or arXiv:...vN ... for this version)"
   function extractArxivFromCiteAs(htmlStr) {
-  if (!htmlStr) return { id: null, version: null };
+    if (!htmlStr) return { id: null, version: null };
+    const s = String(htmlStr)
+      .replace(/&nbsp;/gi, " ")
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, " ");
 
-  const raw = String(htmlStr)
-    .replace(/&nbsp;/gi, " ")
-    .replace(/\u00a0/g, " ");
-
-  // Helper: pull latest [vN] from any text window
-  function latestVersionFromText(t) {
-    const vs = [...String(t || "").matchAll(/\[v(\d+)\]/ig)].map(m => m[1]).filter(Boolean);
-    if (!vs.length) return null;
-    return "v" + vs[vs.length - 1];
-  }
-
-  // First try parsing DOM (best)
-  try {
-    const doc = new DOMParser().parseFromString(raw, "text/html");
-
-    // 1) meta tags (often present)
-    const metaId =
-      doc.querySelector('meta[name="citation_arxiv_id"]')?.getAttribute("content") ||
-      doc.querySelector('meta[name="citation_arxiv"]')?.getAttribute("content") ||
-      doc.querySelector('meta[name="arxiv_id"]')?.getAttribute("content") ||
-      "";
-
-    const meta = extractArxivFromText(metaId);
-    if (meta.id && meta.version) return meta;
-
-    const bodyText = (doc.body?.innerText || doc.documentElement?.innerText || "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    const low = bodyText.toLowerCase();
-
-    const citeIdx = low.indexOf("cite as");
-    const citeWindow = citeIdx >= 0 ? bodyText.slice(citeIdx, citeIdx + 1800) : bodyText.slice(0, 2400);
-
-    let m = citeWindow.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)\b/i);
+    let m = s.match(/\(\s*or\s+arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)\b/i);
     if (m) return { id: m[1], version: m[2] };
 
-    m = citeWindow.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\b/i);
-    let id = m ? m[1] : (meta.id || null);
-
-    // 3) Submission history fallback for version (grab last [vN])
-    const shIdx = low.indexOf("submission history");
-    const shWindow = shIdx >= 0 ? bodyText.slice(shIdx, shIdx + 2200) : bodyText;
-    let version = latestVersionFromText(shWindow);
-
-    // If still no version, try whole page text
-    if (!version) version = latestVersionFromText(bodyText);
-
-    return { id, version };
-
-  } catch (e) {
-    // fall through to regex-only
-  }
-
-  // Regex-only fallback (no DOM)
-  const s = raw.replace(/\s+/g, " ");
-
-  let m = s.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)\b/i);
-  if (m) return { id: m[1], version: m[2] };
-
-  m = s.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\b/i);
-  const id = m ? m[1] : null;
-
-  const version = latestVersionFromText(s);
-
-  return { id, version };
-}
-
-    // 3) Submission history line like: "Submitted on 12 Sep 2024 (v2), last revised ..."
-    m = s.match(/\bsubmitted\s+on\b[^]{0,600}?\(\s*(v\d+)\s*\)/i);
-    if (m) {
-      // id may be elsewhere; pick first id
-      const idm = s.match(/\b(\d{4}\.\d{4,5})\b/);
-      return { id: idm ? idm[1] : null, version: m[1] };
-    }
-
-    // 4) Any "(or arXiv:...vN ... for this version)" pattern
-    m = s.match(/\(\s*or\s+arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)\b/i);
+    m = s.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)\b[^\n\r]{0,160}for\s+this\s+version/i);
     if (m) return { id: m[1], version: m[2] };
 
-    // 5) Generic arXiv:ID vN anywhere
-    m = s.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)?\b/i);
-    if (m) return { id: m[1], version: (m[2]||null) };
+    const low = s.toLowerCase();
+    const idx = low.indexOf("cite as");
+    const window = idx >= 0 ? s.slice(idx, idx + 900) : s;
 
-    // 6) Fallback: first bare ID and optional version
-    m = ARXIV_ID_RE.exec(s);
-    if (m) return { id: m[1], version: (m[2]||null) };
+    m = window.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\s*(v\d+)\b/i);
+    if (m) return { id: m[1], version: m[2] };
 
-    return { id: null, version: null };
+    m = window.match(/arxiv:\s*([0-9]{4}\.[0-9]{4,5})\b/i);
+    return { id: m ? m[1] : null, version: null };
   }
 
-function parseApiXml(xmlStr) {
+  function parseApiXml(xmlStr) {
     const doc = new DOMParser().parseFromString(xmlStr, "text/xml");
     const idRaw = xmlText(doc, "id");
     const { id } = extractArxivFromText(idRaw);
     const title = xmlText(doc, "title");
     const abstract = xmlText(doc, "abstract");
 
-    const authors = [...doc.getElementsByTagName("author")].map((a, idx) => ({
-      seq: idx + 1,
+    const authors = [...doc.getElementsByTagName("author")].map(a => ({
       keyname: xmlText(a, "keyname"),
       forenames: xmlText(a, "forenames"),
       orcid: null,
@@ -970,74 +919,44 @@ function parseApiXml(xmlStr) {
       ? `<author-keywords>\n${keywords.map(k => `              <author-keyword>${escapeXml(k)}</author-keyword>`).join("\n")}\n            </author-keywords>\n`
       : "";
 
-    // --- AUTHOR GROUPS (Elsevier-style) ---
-    // Group by affiliation text. An author with multiple affiliations appears in multiple author-groups.
-    // If an author has no affiliation, they get their own author-group with NO <affiliation> tag.
-    const authorsNorm = (authors || []).map((a, idx) => ({ ...a, __seq: idx + 1 }));
-
-    function makeInitials(given) {
-      if (!given) return "";
-      const parts = String(given).trim().split(/\s+/).filter(Boolean);
-      return parts.map(p => {
-        if (/^[A-Z]\.?$/i.test(p)) return (p.replace(".","").toUpperCase() + ".");
-        if (/^[A-Z]\.[A-Z]\.$/i.test(p)) return p.toUpperCase(); // "M.O."
-        return (p[0] ? (p[0].toUpperCase() + ".") : "");
-      }).join("");
-    }
-
-    const affMap = new Map(); // affText -> Map(authorSeq -> authorObj)
-    const noAffAuthors = [];
-
-    for (const a of authorsNorm) {
-      const affs = (a.affiliations || []).map(x => String(x || "").trim()).filter(Boolean);
-      if (!affs.length) {
-        noAffAuthors.push(a);
-        continue;
-      }
-      for (const aff of affs) {
-        if (!affMap.has(aff)) affMap.set(aff, new Map());
-        affMap.get(aff).set(a.__seq, a);
-      }
-    }
-
-    const authorXml = (a) => {
+    const authorGroupsXml = (authors || []).map((a, i) => {
       const given = (a.forenames || "").trim();
       const surname = (a.keyname || "").trim();
-      const initials = makeInitials(given);
+
+      // initials: preserve dots (PDF/API style). If given already has initials like "M. O." keep them.
+      // We'll compute from given words when needed.
+      let initials = "";
+      if (given){
+        const parts = given.split(/\s+/).filter(Boolean);
+        initials = parts.map(p => {
+          if (/^[A-Z]\.?$/i.test(p)) return (p.replace(".","").toUpperCase() + ".");
+          if (/^[A-Z]\.[A-Z]\.$/i.test(p)) return p.toUpperCase(); // "M.O."
+          return (p[0] ? (p[0].toUpperCase() + ".") : "");
+        }).join("");
+      }
+
       const emailXml = a.email ? `\n              <ce:e-address>${escapeXml(a.email)}</ce:e-address>` : "";
+      // NOTE: Your example uses author orcid="" attribute; we keep ce:orcid only if you want later.
+      // Keeping current approach: omit if none.
       const orcidXml = a.orcid ? `\n              <ce:orcid>${escapeXml(a.orcid)}</ce:orcid>` : "";
-      return `            <author seq="${a.__seq}">
+
+      const affs = (a.affiliations || []).slice(0, 10);
+      const affXml = affs.length
+        ? affs.map(src => `            <affiliation>
+              <!-- telemetry: {"confidence": 0.35} -->
+              <ce:source-text>${escapeXml(src)}</ce:source-text>
+            </affiliation>`).join("\n")
+        : ``; // IMPORTANT: if none, do NOT create empty tags per your rule
+
+      return `          <author-group seq="${i+1}">
+            <author seq="${i+1}">
               <ce:initials>${escapeXml(initials || "")}</ce:initials>
               <ce:surname>${escapeXml(surname)}</ce:surname>
               <ce:given-name>${escapeXml(given)}</ce:given-name>${emailXml}${orcidXml}
-            </author>`;
-    };
-
-    let groupSeq = 1;
-    const groups = [];
-
-    // Affiliated groups first
-    for (const [affText, authorMap] of affMap.entries()) {
-      const list = [...authorMap.values()].sort((x,y) => x.__seq - y.__seq);
-      const authorsBlock = list.map(authorXml).join("\n");
-      const affXml = `            <affiliation>
-              <!-- telemetry: {"confidence": 0.35} -->
-              <ce:source-text>${escapeXml(affText)}</ce:source-text>
-            </affiliation>`;
-      groups.push(`          <author-group seq="${groupSeq++}">
-${authorsBlock}
+            </author>
 ${affXml}
-          </author-group>`);
-    }
-
-    // No-affiliation authors: each in their own group with NO <affiliation> tag
-    for (const a of noAffAuthors.sort((x,y) => x.__seq - y.__seq)) {
-      groups.push(`          <author-group seq="${groupSeq++}">
-${authorXml(a)}
-          </author-group>`);
-    }
-
-    const authorGroupsXml = groups.join("\n");
+          </author-group>`;
+    }).join("\n");
 
     const absXml = abstractText
       ? `          <abstracts>
@@ -1085,7 +1004,7 @@ ${kwXml}          </citation-info>
           <citation-title>
             <titletext xml:lang="ENG" original="y">${escapeXml(chosenTitle)}</titletext>
           </citation-title>
-${authorGroupsXml}
+${authorGroupsXml || ``}
 ${absXml}          <source srcid="???"/>
         </head>
         <tail>
@@ -1097,7 +1016,7 @@ ${absXml}          <source srcid="???"/>
 </units>`;
   }
 
-async function detectSupportDocsByContent(zip, guessedId) {
+  async function detectSupportDocsByContent(zip, guessedId) {
     const names = Object.keys(zip.files).filter(n => !zip.files[n].dir);
 
     const xmlNames = names.filter(n => lower(n).endsWith(".xml"));
